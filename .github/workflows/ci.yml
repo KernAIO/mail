@@ -9,6 +9,31 @@ permissions: { contents: read, packages: read }
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgres://kern:kern@localhost:5432/kern
+      SMTP_URL: smtp://localhost:1025
+      MAILPIT_URL: http://localhost:8025
+    services:
+      # The suites run against a real Postgres: they create a scratch database per file, apply the
+      # migrations and prove row-level security by connecting as an unprivileged role. Nothing here
+      # is mocked, so without this service the whole suite fails to start rather than quietly
+      # passing.
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: kern
+          POSTGRES_PASSWORD: kern
+          POSTGRES_DB: kern
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U kern"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      # `mail` sends over SMTP for real and then reads the message back out of the inbox.
+      mailpit:
+        image: axllent/mailpit:latest
+        ports: ['1025:1025', '8025:8025']
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

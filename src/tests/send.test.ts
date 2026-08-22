@@ -19,6 +19,7 @@ import { eq } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   expectRejection,
+  MAILPIT_URL,
   type MailApi,
   mailpit,
   PLATFORM_FROM,
@@ -51,6 +52,13 @@ beforeAll(async () => {
   ws = mail.workspaceId
   api = mail.api(mail.admin)
   mailpitUp = await mailpit.available()
+  // Skipping the only tests that prove a message really leaves the process is fine on a laptop with
+  // no infrastructure running, but it must never be how CI reports success. There it is a failure.
+  if (!mailpitUp) {
+    const message = `Mailpit is not answering on ${MAILPIT_URL}. Start it with \`pnpm infra\` from the umbrella repository.`
+    if (process.env.CI) throw new Error(message)
+    process.stderr.write(`\n  ⚠ ${message}\n    The end-to-end delivery tests will be skipped.\n\n`)
+  }
 })
 afterAll(async () => {
   await mailpit.delete(delivered).catch(() => {})
@@ -264,7 +272,7 @@ describe('the delivery log', () => {
 
 describe('end to end through SMTP', () => {
   it('queues, sends and lands in the inbox', async ({ skip }) => {
-    if (!mailpitUp) skip()
+    if (!mailpitUp) skip('Mailpit is not running')
     const to = recipient('e2e')
     const subject = `Kern e2e ${to}`
 
@@ -301,7 +309,7 @@ describe('end to end through SMTP', () => {
   })
 
   it('renders a template on the way out', async ({ skip }) => {
-    if (!mailpitUp) skip()
+    if (!mailpitUp) skip('Mailpit is not running')
     const to = recipient('e2e-template')
 
     const { deliveryId } = await send({
@@ -334,7 +342,7 @@ describe('end to end through SMTP', () => {
   })
 
   it('drops the suppressed recipients and still delivers to the rest', async ({ skip }) => {
-    if (!mailpitUp) skip()
+    if (!mailpitUp) skip('Mailpit is not running')
     const good = recipient('e2e-good')
     const blocked = recipient('e2e-blocked')
     await addSuppression(mail.kernel, { workspaceId: ws, email: blocked, reason: 'bounce' })
@@ -360,7 +368,7 @@ describe('end to end through SMTP', () => {
   })
 
   it('sends the workspace test message from the settings screen', async ({ skip }) => {
-    if (!mailpitUp) skip()
+    if (!mailpitUp) skip('Mailpit is not running')
     const to = recipient('e2e-settings-test')
 
     const result = await api.settings.test({ workspaceId: ws, to })
