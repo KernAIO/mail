@@ -1,7 +1,7 @@
 # Kern mail service
 
 Outbound email for the whole platform, and the future home of the personal IMAP inbox.
-Part of [Kern](https://github.com/KernALO/kern).
+Part of [Kern](https://github.com/KernAIO/kern).
 
 Every message — account emails from core, notification digests, module notifications — is queued
 through `kernel.call('mail.send', …)`, so retries, suppression lists and the delivery log behave the

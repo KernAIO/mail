@@ -4,8 +4,8 @@
  * sends skip the address.
  */
 
-import type { Kernel } from '@kernalo/kernel'
-import { addSuppression, deliveries, emitDeliveryEvent, mailEvents } from '@kernalo/module-mail/server'
+import type { Kernel } from '@kernaio/kernel'
+import { addSuppression, deliveries, emitDeliveryEvent, mailEvents } from '@kernaio/module-mail/server'
 import { eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import type { MailEnv } from './env.js'
