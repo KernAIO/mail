@@ -28,3 +28,32 @@ The repositories are **public**, so every commit is visible the moment it is pus
 - `pnpm typecheck && pnpm lint && pnpm test && pnpm build` must pass before pushing.
 - UI follows `app/DESIGN.md` (Ink/paper design system) and must work in RTL (fa/ar) and dark mode.
 - All user-facing strings go through i18n (Paraglide) — no hardcoded English in components.
+
+## Keeping this file current
+This file is how the next person — or the next agent — avoids repeating what we already worked out.
+When you learn something durable, add it here **in the same commit as the change that taught you**:
+- a trap that cost you time (a silent failure, a misleading error, a tool that lies about success)
+- a convention you had to infer from reading several files
+- a decision and the reason behind it, especially where the obvious choice is wrong
+Keep it specific and short. Delete anything that stops being true — a stale note is worse than none.
+
+---
+
+# This repository: mail (outbound email)
+
+Providers, templates, the delivery log and suppression lists. Runs on **:4200**. Every message in the
+platform — account email from core, digests, module notifications — is queued through
+`kernel.call('mail.send', …)` so retries, suppression and the audit trail behave identically.
+
+**Things worth knowing**
+- A workspace configures its own provider (SMTP, Mailgun, SES, Postmark, Resend); without one the
+  instance's `SMTP_URL` is used, so a fresh self-host works with no configuration.
+- Secrets are encrypted at rest and never returned: reads replace them with a placeholder, and writing
+  the placeholder back keeps the stored value. Do not "helpfully" return the real value.
+- Provider webhooks (`/api/mail/webhooks/<provider>`) authenticate with `MAIL_WEBHOOK_TOKEN`, since a
+  provider cannot present a Kern session.
+- `deliveries` and `suppressions` are **not** row-level secured: their `workspace_id` is nullable
+  because instance-level mail has no tenant. Access is filtered in the API instead — see
+  `migrations/0001_notes.sql`.
+- Mailpit (http://localhost:8025) receives everything in development; its API is how tests assert.
+- The personal IMAP inbox is not built yet — interfaces are sketched in `src/inbox/`.
