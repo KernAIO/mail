@@ -1,5 +1,5 @@
-import { createHttpServer, createKernel, type Kernel } from '@kernaio/kernel'
-import { mailModule } from '@kernaio/module-mail/server'
+import { createHttpServer, createKernel, type Kernel } from '@kernhq/kernel'
+import { mailModule } from '@kernhq/module-mail/server'
 import type { FastifyInstance } from 'fastify'
 import { loadMailEnv, type MailEnv } from './env.js'
 import { createPrincipals, type Principals } from './principal.js'
