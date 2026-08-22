@@ -56,4 +56,9 @@ platform — account email from core, digests, module notifications — is queue
   because instance-level mail has no tenant. Access is filtered in the API instead — see
   `migrations/0001_notes.sql`.
 - Mailpit (http://localhost:8025) receives everything in development; its API is how tests assert.
+- `providerFor()` and `instanceName()` read `SMTP_URL` / `MAIL_FROM` / `KERN_INSTANCE_NAME` from
+  `process.env`, not from the validated `MailEnv`. dotenv puts them there in a deployment; anything that
+  boots the service programmatically has to set them the same way.
+- Tests boot the service with its own pg-boss worker, so `mail.send` really travels through the queue
+  and out over SMTP; each suite uses a unique recipient so several can share one Mailpit.
 - The personal IMAP inbox is not built yet — interfaces are sketched in `src/inbox/`.

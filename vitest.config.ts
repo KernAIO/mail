@@ -1,11 +1,13 @@
 import { defineConfig } from 'vitest/config'
+
 export default defineConfig({
   test: {
-    // services carry no unit tests yet; the suites land with the features they cover
-    passWithNoTests: true,
-    include: ['test/**/*.test.ts', 'src/**/*.test.ts'],
-    testTimeout: 60_000,
-    hookTimeout: 60_000,
-    fileParallelism: false,
+    include: ['src/**/*.test.ts'],
+    // The end-to-end send waits on pg-boss and a real SMTP round trip.
+    testTimeout: 45_000,
+    hookTimeout: 120_000,
+    maxWorkers: 2,
+    minWorkers: 1,
+    env: { NODE_ENV: 'test', LOG_LEVEL: process.env.LOG_LEVEL ?? 'silent' },
   },
 })
