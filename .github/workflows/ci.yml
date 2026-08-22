@@ -10,9 +10,9 @@ jobs:
   check:
     runs-on: ubuntu-latest
     env:
-      DATABASE_URL: postgres://kern:kern@localhost:5432/kern
-      SMTP_URL: smtp://localhost:1025
-      MAILPIT_URL: http://localhost:8025
+      DATABASE_URL: postgres://kern:kern@127.0.0.1:5432/kern
+      SMTP_URL: smtp://127.0.0.1:1025
+      MAILPIT_URL: http://127.0.0.1:8025
     services:
       # The suites run against a real Postgres: they create a scratch database per file, apply the
       # migrations and prove row-level security by connecting as an unprivileged role. Nothing here
@@ -40,6 +40,16 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       - run: if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install; fi
+      # Mailpit publishes no health check, so wait for its API rather than letting the suite fail on
+      # a container that simply had not finished starting.
+      - name: Wait for Mailpit
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -sf "$MAILPIT_URL/api/v1/info" >/dev/null; then echo "Mailpit is ready"; exit 0; fi
+            sleep 2
+          done
+          echo "::error::Mailpit never answered on $MAILPIT_URL"
+          exit 1
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
