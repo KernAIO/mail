@@ -2,6 +2,12 @@
 
 **Email leaving Kern, and replies coming back.**
 
+[![CI](https://img.shields.io/github/actions/workflow/status/KernAIO/mail/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/KernAIO/mail/actions/workflows/ci.yml)
+[![Licence](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
+[![Status](https://img.shields.io/badge/status-pre--1.0-orange?style=flat-square)](https://github.com/KernAIO/kern#what-works-today)
+[![Last commit](https://img.shields.io/github/last-commit/KernAIO/mail?style=flat-square)](https://github.com/KernAIO/mail/commits/main)
+[![Website](https://img.shields.io/badge/kernaio.com-1f2328?style=flat-square)](https://kernaio.com)
+
 Every message [Kern](https://github.com/KernAIO/kern) sends goes through this service — the sign-in
 link, the invitation, the digest, the notification a module raised. One queue, one delivery log, one
 suppression list, so a bounce is visible wherever it happened.
@@ -79,4 +85,7 @@ secret unchanged.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) and [CLAUDE.md](CLAUDE.md). Licence: [AGPL-3.0](LICENSE).
 
-Website: [kernaio.com](https://kernaio.com).
+---
+
+**Kern** — one place for your team's work: issues, conversations, documents and people.
+Open source, self-hosted. [kernaio.com](https://kernaio.com) · [github.com/KernAIO](https://github.com/KernAIO)
