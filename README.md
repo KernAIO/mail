@@ -1,3 +1,7 @@
+<p align="center">
+<img src="https://raw.githubusercontent.com/KernAIO/kern/main/assets/kern-mark.svg" width="56" alt="">
+</p>
+
 # mail
 
 **Email leaving Kern, and replies coming back.**
