@@ -5,8 +5,6 @@ import { loadMailEnv, type MailEnv } from './env.js'
 import { createPrincipals, type Principals } from './principal.js'
 import { mountWebhooks } from './webhooks.js'
 
-export const MAIL_VERSION = '0.1.0'
-
 export interface MailServiceOptions {
   role?: 'api' | 'worker' | 'both'
   env?: Record<string, string | undefined>
@@ -30,7 +28,6 @@ export async function createMailService(opts: MailServiceOptions = {}): Promise<
   const env = loadMailEnv(opts.env ?? {})
   const kernel = await createKernel({
     service: 'mail',
-    version: MAIL_VERSION,
     modules: [mailModule],
     role,
     env: { PORT: process.env.PORT ?? '4200', ...opts.env },
@@ -51,7 +48,7 @@ export async function createMailService(opts: MailServiceOptions = {}): Promise<
       kernel,
       resolvePrincipal: (req) => principals.fromRequest(req),
       corsOrigins,
-      openapi: { title: 'Kern', version: MAIL_VERSION },
+      openapi: { title: 'Kern', version: kernel.version },
       extend: async (fastify) => {
         mountWebhooks(fastify, kernel, env)
       },
