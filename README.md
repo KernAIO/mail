@@ -1,5 +1,5 @@
 <p align="center">
-<img src="https://raw.githubusercontent.com/KernAIO/kern/main/assets/kern-mark.svg" width="56" alt="">
+<img src="https://raw.githubusercontent.com/KernAIO/app/main/assets/kern-mark.svg" width="56" alt="">
 </p>
 
 # mail
@@ -8,11 +8,11 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/KernAIO/mail/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/KernAIO/mail/actions/workflows/ci.yml)
 [![Licence](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
-[![Status](https://img.shields.io/badge/status-pre--1.0-orange?style=flat-square)](https://github.com/KernAIO/kern#what-works-today)
+[![Status](https://img.shields.io/badge/status-pre--1.0-orange?style=flat-square)](https://github.com/KernAIO/app#what-works-today)
 [![Last commit](https://img.shields.io/github/last-commit/KernAIO/mail?style=flat-square)](https://github.com/KernAIO/mail/commits/main)
 [![Website](https://img.shields.io/badge/kernaio.com-1f2328?style=flat-square)](https://kernaio.com)
 
-Every message [Kern](https://github.com/KernAIO/kern) sends goes through this service — the sign-in
+Every message [Kern](https://github.com/KernAIO/app) sends goes through this service — the sign-in
 link, the invitation, the digest, the notification a module raised. One queue, one delivery log, one
 suppression list, so a bounce is visible wherever it happened.
 
@@ -30,7 +30,7 @@ You need:
 - An SMTP server. [Mailpit](https://mailpit.axllent.org/) is ideal for development.
 
 Most people should run the whole platform from the
-[umbrella repository](https://github.com/KernAIO/kern) instead. There, `pnpm setup && pnpm infra &&
+[umbrella repository](https://github.com/KernAIO/app) instead. There, `pnpm setup && pnpm infra &&
 pnpm dev` starts mail with Mailpit beside it.
 
 ### 1. Install and configure
@@ -93,7 +93,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) and [CLAUDE.md](CLAUDE.md).
 
 [AGPL-3.0-only](LICENSE). This repository is part of the Kern product.
 The Kern framework you build modules against is Apache-2.0 — see
-[LICENSING.md](https://github.com/KernAIO/kern/blob/main/LICENSING.md).
+[LICENSING.md](https://github.com/KernAIO/app/blob/main/LICENSING.md).
 
 ---
 
