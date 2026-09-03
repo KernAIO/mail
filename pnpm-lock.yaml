@@ -19,8 +19,8 @@ importers:
         specifier: ^0.9.1
         version: 0.9.1
       '@kernhq/module-mail':
-        specifier: ^0.4.7
-        version: 0.4.7(@kernhq/contracts@0.7.0)(@kernhq/kernel@0.9.1)(fastify@5.12.1)(pg@8.23.0)(svgo@4.1.0)
+        specifier: ^0.5.0
+        version: 0.5.0(@kernhq/contracts@0.7.0)(@kernhq/kernel@0.9.1)(fastify@5.12.1)(pg@8.23.0)(svgo@4.1.0)
       dotenv:
         specifier: ^17.4.0
         version: 17.4.2
@@ -434,8 +434,8 @@ packages:
   '@kernhq/kernel@0.9.1':
     resolution: {integrity: sha512-s5Q1vhUYxk0MwFLjSWODNzDVCgY+WjmHi4ZjMiFBsxSoxby4tUlGsGEBAabwn4fOS6UZEQ0D6GD58qKVnB2B2A==}
 
-  '@kernhq/module-mail@0.4.7':
-    resolution: {integrity: sha512-eF5EQ62Y4u/zzW5Q61GL/rEMvJ493wSPDXsKoYAR9DY6Nf7ubnIHCgHW66TDGJZ6UKTE1+ELY/cUNQzaTHUAMQ==}
+  '@kernhq/module-mail@0.5.0':
+    resolution: {integrity: sha512-IBnfT1F56qjM1Mk6sf5zPo2tgIX8xyzzHEsWlPokLQ370uiqJsxkdSC8lzJoW+umwIft5kuIkyxQNvfUrlCOWQ==}
     engines: {node: '>=24'}
     peerDependencies:
       '@kernhq/contracts': ^0.7.0
@@ -691,6 +691,7 @@ packages:
   '@smithy/node-http-handler@4.12.0':
     resolution: {integrity: sha512-0mq1pHadfyXCYCqm2cNpbjNIT+fbaUpNxewZb/YNr2L0IrEVMOb8gM/Fl4K6XvHCW3uSNDFwPl/+iKm0bx9jYg==}
     engines: {node: '>=18.0.0'}
+    deprecated: Depreacted due to a memory leak issue https://github.com/smithy-lang/smithy-typescript/issues/2258
 
   '@smithy/signature-v4@5.7.3':
     resolution: {integrity: sha512-7ImGm+FkHRLcBaRttIAMZ6bzJZWb2cJGoYjq46F2UjycujWzrL9GEN9h4w7eQyXJYnltrUhxbbieBAIRrdqpow==}
@@ -3111,7 +3112,7 @@ snapshots:
       - supports-color
       - ws
 
-  '@kernhq/module-mail@0.4.7(@kernhq/contracts@0.7.0)(@kernhq/kernel@0.9.1)(fastify@5.12.1)(pg@8.23.0)(svgo@4.1.0)':
+  '@kernhq/module-mail@0.5.0(@kernhq/contracts@0.7.0)(@kernhq/kernel@0.9.1)(fastify@5.12.1)(pg@8.23.0)(svgo@4.1.0)':
     dependencies:
       '@aws-sdk/client-sesv2': 3.1124.0
       '@kernhq/contracts': 0.7.0
