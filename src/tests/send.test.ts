@@ -36,12 +36,14 @@ let mailpitUp = false
 /** every message this suite put into the shared dev inbox, cleaned up at the end */
 const delivered: string[] = []
 
+/**
+ * Reads bind `'*'`, the instance-wide binding `mod_mail`'s row-level policies admit — the same one
+ * the send job uses. Against a module version from before the policies the binding is inert.
+ */
+const ALL_WORKSPACES = '*'
 const deliveryRow = (id: string) =>
-  mail.kernel.database.db
-    .select()
-    .from(deliveries)
-    .where(eq(deliveries.id, id))
-    .limit(1)
+  mail.kernel.database
+    .withWorkspace(ALL_WORKSPACES, (tx) => tx.select().from(deliveries).where(eq(deliveries.id, id)).limit(1))
     .then((r) => r[0])
 
 const send = (input: Record<string, unknown>) =>
@@ -195,10 +197,9 @@ describe('suppressions', () => {
     await addSuppression(mail.kernel, { workspaceId: ws, email: address.toUpperCase(), reason: 'bounce' })
     await addSuppression(mail.kernel, { workspaceId: ws, email: address, reason: 'manual' })
 
-    const rows = await mail.kernel.database.db
-      .select()
-      .from(suppressions)
-      .where(eq(suppressions.email, address.toLowerCase()))
+    const rows = await mail.kernel.database.withWorkspace(ALL_WORKSPACES, (tx) =>
+      tx.select().from(suppressions).where(eq(suppressions.email, address.toLowerCase())),
+    )
     expect(rows).toHaveLength(1)
     expect(rows[0]!.reason).toBe('bounce')
 

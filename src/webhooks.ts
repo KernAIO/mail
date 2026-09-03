@@ -19,6 +19,14 @@ type Normalised = {
 
 const asString = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
 
+/**
+ * The binding `mod_mail`'s row-level policies admit for instance-wide work. Written here rather
+ * than imported so this service builds against a module version from before the policies existed
+ * as well as after: with no policy the binding is inert, with one it is what lets a webhook find a
+ * delivery it knows only by the provider's id.
+ */
+const ALL_WORKSPACES = '*'
+
 function normalise(provider: string, body: Record<string, any>): Normalised {
   switch (provider) {
     case 'mailgun': {
@@ -129,22 +137,28 @@ export function mountWebhooks(app: FastifyInstance, kernel: Kernel, env: MailEnv
       const n = normalise(provider, body)
       if (n.event === 'ignored') return { ok: true, ignored: true }
 
+      // A provider reports on every workspace's mail at once, so this binds every workspace: the
+      // module's row-level policies admit `'*'` and refuse a transaction that binds nothing.
       const row = n.providerMessageId
         ? (
-            await kernel.database.db
-              .select()
-              .from(deliveries)
-              .where(eq(deliveries.providerMessageId, n.providerMessageId))
-              .limit(1)
+            await kernel.database.withWorkspace(ALL_WORKSPACES, (tx) =>
+              tx
+                .select()
+                .from(deliveries)
+                .where(eq(deliveries.providerMessageId, n.providerMessageId as string))
+                .limit(1),
+            )
           )[0]
         : undefined
 
       if (row) {
         const status = n.event === 'delivered' ? 'sent' : n.event === 'bounced' ? 'bounced' : 'failed'
-        await kernel.database.db
-          .update(deliveries)
-          .set({ status, error: n.reason, updatedAt: new Date() })
-          .where(eq(deliveries.id, row.id))
+        await kernel.database.withWorkspace(ALL_WORKSPACES, (tx) =>
+          tx
+            .update(deliveries)
+            .set({ status, error: n.reason, updatedAt: new Date() })
+            .where(eq(deliveries.id, row.id)),
+        )
         if (n.event !== 'delivered') {
           await emitDeliveryEvent(
             kernel,

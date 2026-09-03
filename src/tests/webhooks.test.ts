@@ -2,6 +2,7 @@
  * Provider webhooks. Each provider reports deliveries and bounces in its own shape; the service
  * normalises them into a delivery status plus, for hard failures, a suppression entry.
  */
+import type { Tx } from '@kernhq/kernel'
 import { deliveries, loadSuppressed, suppressions } from '@kernhq/module-mail/server'
 import { eq } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -18,29 +19,34 @@ const post = (provider: string, body: unknown, query = `?token=${TOKEN}`) =>
     body: JSON.stringify(body),
   })
 
+/**
+ * Every read and write here binds `'*'`, the instance-wide binding `mod_mail`'s row-level policies
+ * admit — the same one the webhook handler uses, because a provider reports on every workspace's
+ * mail at once. Against a module version from before the policies the binding is inert.
+ */
+const ALL_WORKSPACES = '*'
+const unbound = <T>(fn: (tx: Tx) => Promise<T>) => mail.kernel.database.withWorkspace(ALL_WORKSPACES, fn)
+
 /** A delivery row already marked sent, as it would be after the provider accepted it. */
 async function sentDelivery(to: string, providerMessageId: string) {
-  const [row] = await mail.kernel.database.db
-    .insert(deliveries)
-    .values({
-      workspaceId: mail.workspaceId,
-      to: [to],
-      subject: 'Webhook subject',
-      provider: 'postmark',
-      status: 'sent',
-      providerMessageId,
-    })
-    .returning()
+  const [row] = await unbound((tx) =>
+    tx
+      .insert(deliveries)
+      .values({
+        workspaceId: mail.workspaceId,
+        to: [to],
+        subject: 'Webhook subject',
+        provider: 'postmark',
+        status: 'sent',
+        providerMessageId,
+      })
+      .returning(),
+  )
   return row!
 }
 
 const reload = (id: string) =>
-  mail.kernel.database.db
-    .select()
-    .from(deliveries)
-    .where(eq(deliveries.id, id))
-    .limit(1)
-    .then((r) => r[0]!)
+  unbound((tx) => tx.select().from(deliveries).where(eq(deliveries.id, id)).limit(1)).then((r) => r[0]!)
 
 beforeAll(async () => {
   mail = await startMail({ env: { MAIL_WEBHOOK_TOKEN: TOKEN } })
@@ -118,10 +124,9 @@ describe('normalising provider events', () => {
       Email: to,
     })
     expect((await reload(row.id)).status).toBe('failed')
-    const [suppression] = await mail.kernel.database.db
-      .select()
-      .from(suppressions)
-      .where(eq(suppressions.email, to.toLowerCase()))
+    const [suppression] = await unbound((tx) =>
+      tx.select().from(suppressions).where(eq(suppressions.email, to.toLowerCase())),
+    )
     expect(suppression?.reason).toBe('complaint')
     expect(suppression?.source).toBe('postmark')
   })
