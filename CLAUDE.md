@@ -95,9 +95,12 @@ platform — account email from core, digests, module notifications — is queue
   the placeholder back keeps the stored value. Do not "helpfully" return the real value.
 - Provider webhooks (`/api/mail/webhooks/<provider>`) authenticate with `MAIL_WEBHOOK_TOKEN`, since a
   provider cannot present a Kern session.
-- `deliveries` and `suppressions` are **not** row-level secured: their `workspace_id` is nullable
-  because instance-level mail has no tenant. Access is filtered in the API instead — see
-  `migrations/0001_notes.sql`.
+- `deliveries`, `suppressions` and `inbound_routes` carry a **forced row-level policy** since
+  `@kernhq/module-mail` 0.5.0 (they carried none before, and this note argued for it). The policy
+  admits a row for its own workspace or for the `'*'` binding; this service's webhook handler and
+  its tests bind `'*'` (written locally as `ALL_WORKSPACES`) because a provider reports on every
+  workspace's mail at once. A transaction that binds nothing sees nothing — a raw
+  `kernel.database.db` query against these tables returns no rows, which is the point.
 - Mailpit (http://localhost:8025) receives everything in development; its API is how tests assert.
 - `providerFor()` and `instanceName()` read `SMTP_URL` / `MAIL_FROM` / `KERN_INSTANCE_NAME` from
   `process.env`, not from the validated `MailEnv`. dotenv puts them there in a deployment; anything that
