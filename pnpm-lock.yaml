@@ -19,8 +19,8 @@ importers:
         specifier: ^0.9.1
         version: 0.9.1
       '@kernhq/module-mail':
-        specifier: ^0.5.0
-        version: 0.5.0(@kernhq/contracts@0.7.0)(@kernhq/kernel@0.9.1)(fastify@5.12.1)(pg@8.23.0)(svgo@4.1.0)
+        specifier: ^0.5.2
+        version: 0.5.2(@kernhq/contracts@0.7.0)(@kernhq/kernel@0.9.1)(fastify@5.12.1)(pg@8.23.0)(svgo@4.1.0)
       dotenv:
         specifier: ^17.4.0
         version: 17.4.2
@@ -434,8 +434,8 @@ packages:
   '@kernhq/kernel@0.9.1':
     resolution: {integrity: sha512-s5Q1vhUYxk0MwFLjSWODNzDVCgY+WjmHi4ZjMiFBsxSoxby4tUlGsGEBAabwn4fOS6UZEQ0D6GD58qKVnB2B2A==}
 
-  '@kernhq/module-mail@0.5.0':
-    resolution: {integrity: sha512-IBnfT1F56qjM1Mk6sf5zPo2tgIX8xyzzHEsWlPokLQ370uiqJsxkdSC8lzJoW+umwIft5kuIkyxQNvfUrlCOWQ==}
+  '@kernhq/module-mail@0.5.2':
+    resolution: {integrity: sha512-r6RzF3dW8ltIp2jwqpSnW9DrBlgYM500Aybdb/zk/a9Nwy8mzZaxk4cqtFDy686czqk9PqB1O0DTCY6on2rv3Q==}
     engines: {node: '>=24'}
     peerDependencies:
       '@kernhq/contracts': ^0.7.0
@@ -3112,7 +3112,7 @@ snapshots:
       - supports-color
       - ws
 
-  '@kernhq/module-mail@0.5.0(@kernhq/contracts@0.7.0)(@kernhq/kernel@0.9.1)(fastify@5.12.1)(pg@8.23.0)(svgo@4.1.0)':
+  '@kernhq/module-mail@0.5.2(@kernhq/contracts@0.7.0)(@kernhq/kernel@0.9.1)(fastify@5.12.1)(pg@8.23.0)(svgo@4.1.0)':
     dependencies:
       '@aws-sdk/client-sesv2': 3.1124.0
       '@kernhq/contracts': 0.7.0
