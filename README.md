@@ -4,7 +4,7 @@
 
 # mail
 
-**Email leaving Kern, and replies coming back.**
+**Every email Kern sends, and what became of it.**
 
 [![CI](https://img.shields.io/github/actions/workflow/status/KernAIO/mail/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/KernAIO/mail/actions/workflows/ci.yml)
 [![Licence](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
@@ -82,13 +82,21 @@ secret unchanged.
   (or send it as `x-kern-webhook-token`). With the variable unset, `/api/mail/webhooks/*` answers
   401 to everything: the endpoint writes suppressions, and a suppression a stranger wrote stops that
   address receiving password resets and invitations.
+- **`GET /api/health` names anything configured that way.** A service that refuses every webhook is
+  still a healthy service, so the refusal is invisible unless you go looking: `warnings` in the
+  health payload lists it, and is empty when there is nothing to say.
 - **Only an Amazon SNS endpoint is ever called back.** Confirming an SES subscription means fetching
   a URL out of the request body, so `SubscribeURL` and `SigningCertURL` must both be `https` on
-  `sns.<region>.amazonaws.com`, and the message signature must verify against the certificate there.
-  Anything else is a 400 and no request leaves the process.
-- **Deliveries are not row-level secured.** Instance mail belongs to no workspace, so the column is
-  nullable and access is filtered in the API instead. The reason is written into the module's own
-  `migrations/0001_notes.sql`, in the [modules repository](https://github.com/KernAIO/modules).
+  `sns.<region>.amazonaws.com` — or `sns.<region>.amazonaws.com.cn` in the China partition — and the
+  message signature must verify against the certificate there. Anything else is a 400 and no request
+  leaves the process. SNS labels its JSON `Content-Type: text/plain`, which this route parses as
+  JSON; nothing else in the service does.
+- **Every table is row-level secured.** `deliveries`, `suppressions` and `inbound_routes` carry a
+  forced policy that admits a row for its own workspace, or for the `'*'` binding the instance-wide
+  paths use — the send job, the provider webhooks and the suppression check. A query that binds no
+  workspace reads nothing. The policy is
+  [`migrations/0002_rls.sql`](https://github.com/KernAIO/module-mail/blob/main/migrations/0002_rls.sql)
+  in the module.
 - The personal mail inbox — reading your own IMAP account inside Kern — is **not built yet**. The
   interfaces are sketched in `src/inbox/`.
 
