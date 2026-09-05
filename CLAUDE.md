@@ -134,6 +134,13 @@ platform — account email from core, digests, module notifications — is queue
   the body once, answers 400, and `UnsubscribeConfirmation` is acknowledged before it gets there:
   SNS puts plain English in `Message` for that one, and 400 to a message Amazon considers well formed
   is a delivery failure in their dashboard.
+- **`MAIL_WEBHOOK_TOKEN` unset is reported in `GET /api/health`, not only in a log line.** A service
+  refusing every webhook is a *healthy* service — the provider's dashboard shows the failing endpoint
+  and Kern shows nothing — and nobody reads a container log from three weeks ago. The kernel owns
+  `/api/health` and answers it with an object, so `src/health.ts` adds `warnings` to that object in a
+  `preSerialization` hook rather than standing up a second endpoint. Mount the hook **before**
+  awaiting the webhook `register`: awaiting a register flushes Fastify's pending plugins and a
+  route's hooks are fixed at that point.
 - `deliveries`, `suppressions` and `inbound_routes` carry a **forced row-level policy** since
   `@kernhq/module-mail` 0.5.0 (they carried none before, and this note argued for it). The policy
   admits a row for its own workspace or for the `'*'` binding; this service's webhook handler and

@@ -2,6 +2,7 @@ import { createHttpServer, createKernel, type Kernel } from '@kernhq/kernel'
 import { mailModule } from '@kernhq/module-mail/server'
 import type { FastifyInstance } from 'fastify'
 import { loadMailEnv, type MailEnv } from './env.js'
+import { mountHealthWarnings } from './health.js'
 import { createPrincipals, type Principals } from './principal.js'
 import { mountWebhooks } from './webhooks.js'
 
@@ -49,7 +50,10 @@ export async function createMailService(opts: MailServiceOptions = {}): Promise<
       resolvePrincipal: (req) => principals.fromRequest(req),
       corsOrigins,
       openapi: { title: 'Kern', version: kernel.version },
+      // The hook goes on before the webhook scope is registered: awaiting a `register` flushes
+      // Fastify's pending plugins, and a route's hooks are fixed at that point.
       extend: async (fastify) => {
+        mountHealthWarnings(fastify, env)
         await mountWebhooks(fastify, kernel, env)
       },
     })

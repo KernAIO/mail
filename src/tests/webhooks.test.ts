@@ -145,6 +145,33 @@ describe('an instance with no webhook token configured', () => {
     )
     expect(written).toEqual([])
   })
+
+  /**
+   * Refusing every webhook is right and silent: the provider's dashboard shows a failing endpoint and
+   * Kern shows a healthy service. An operator finds it in the log line at boot or not at all, so the
+   * service says so where they already look.
+   */
+  it('says so in the health output, not only in a log line at boot', async () => {
+    const res = await fetch(`${url}/api/health`)
+    expect(res.status).toBe(200)
+    const health = (await res.json()) as { ok: boolean; warnings: string[] }
+    expect(health.ok).toBe(true)
+    expect(health.warnings).toHaveLength(1)
+    expect(health.warnings[0]).toContain('MAIL_WEBHOOK_TOKEN')
+    expect(health.warnings[0]).toContain('/api/mail/webhooks/*')
+  })
+})
+
+describe('health', () => {
+  it('reports no warnings when the service is configured', async () => {
+    const res = await fetch(`${baseUrl}/api/health`)
+    expect(res.status).toBe(200)
+    expect((await res.json()) as Record<string, unknown>).toMatchObject({
+      ok: true,
+      service: 'mail',
+      warnings: [],
+    })
+  })
 })
 
 /**
