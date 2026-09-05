@@ -93,8 +93,33 @@ platform — account email from core, digests, module notifications — is queue
   instance's `SMTP_URL` is used, so a fresh self-host works with no configuration.
 - Secrets are encrypted at rest and never returned: reads replace them with a placeholder, and writing
   the placeholder back keeps the stored value. Do not "helpfully" return the real value.
-- Provider webhooks (`/api/mail/webhooks/<provider>`) authenticate with `MAIL_WEBHOOK_TOKEN`, since a
-  provider cannot present a Kern session.
+- **A secret that is only checked when it is configured is not a secret.** Provider webhooks
+  (`/api/mail/webhooks/<provider>`) authenticate with `MAIL_WEBHOOK_TOKEN`, since a provider cannot
+  present a Kern session — and the route used to skip the check entirely when the variable was
+  unset, which is what every shipped stack did. So anyone on the internet could `POST` a hard bounce
+  for any address and write an **instance-wide** suppression (an unmatched delivery gives
+  `workspaceId: null`), stopping that person's password resets, magic links and invitations for
+  good. It refuses with 401 when nothing is configured, and compares with `timingSafeEqual` over two
+  digests. The variable stays *optional* in the env schema on purpose: an SMTP-only instance has no
+  provider to hear from and must still boot, and an existing install never re-reads the
+  distribution's `.env.example`, so making it required would take mail down on upgrade for everyone
+  who has no use for it. Fail closed at the route, not at boot.
+- **A URL out of a request body is an outbound request the caller chose.** The SES branch fetched
+  `SubscribeURL` as it was given — a blind SSRF from inside the private network, and
+  `http://169.254.169.254/…` is the first thing anyone tries. `SubscribeURL` and `SigningCertURL`
+  must both be `https`, no port, no credentials, host matching `^sns\.[a-z0-9-]+\.amazonaws\.com$`,
+  and the SNS signature has to verify against the certificate at that URL; `fetch` uses
+  `redirect: 'error'` so a 302 cannot walk out of the allowlist. `new URL()` does the hard part —
+  `https://sns.eu-west-1.amazonaws.com@attacker.example/` has hostname `attacker.example`.
+  Signature verification needs no dependency: `new X509Certificate(pem).publicKey` feeds
+  `createVerify('RSA-SHA256'|'RSA-SHA1')`. Only Amazon can serve that certificate, so
+  `verifySnsSignature` takes a key and `src/tests/sns-signature.test.ts` hands it a generated one.
+- **Amazon SNS posts with `Content-Type: text/plain`, and the route silently ignores it.** Fastify's
+  built-in `text/plain` parser hands the handler the raw *string*, so `body.Type` is undefined, every
+  branch misses and the answer is `200 {"ok":true,"ignored":true}` — measured, not assumed. SES
+  events over SNS therefore reach nothing today; a `text/plain` parser that JSON-parses is what
+  would fix it, and it has to be scoped to this route rather than added to the whole instance. It
+  never masked the SSRF: an attacker sends `application/json`, which is what the tests send too.
 - `deliveries`, `suppressions` and `inbound_routes` carry a **forced row-level policy** since
   `@kernhq/module-mail` 0.5.0 (they carried none before, and this note argued for it). The policy
   admits a row for its own workspace or for the `'*'` binding; this service's webhook handler and

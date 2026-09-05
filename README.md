@@ -78,7 +78,14 @@ secret unchanged.
   what the provider said. A bounce adds the address to the suppression list, and nothing is sent to a
   suppressed address again.
 - **Provider webhooks authenticate with `MAIL_WEBHOOK_TOKEN`**, not a Kern session, because a
-  provider has none.
+  provider has none. Set the variable, then register the webhook URL with `?token=<the same value>`
+  (or send it as `x-kern-webhook-token`). With the variable unset, `/api/mail/webhooks/*` answers
+  401 to everything: the endpoint writes suppressions, and a suppression a stranger wrote stops that
+  address receiving password resets and invitations.
+- **Only an Amazon SNS endpoint is ever called back.** Confirming an SES subscription means fetching
+  a URL out of the request body, so `SubscribeURL` and `SigningCertURL` must both be `https` on
+  `sns.<region>.amazonaws.com`, and the message signature must verify against the certificate there.
+  Anything else is a 400 and no request leaves the process.
 - **Deliveries are not row-level secured.** Instance mail belongs to no workspace, so the column is
   nullable and access is filtered in the API instead. The reason is written into the module's own
   `migrations/0001_notes.sql`, in the [modules repository](https://github.com/KernAIO/modules).

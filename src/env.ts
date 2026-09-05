@@ -15,8 +15,22 @@ export const MailEnv = z.object({
   SMTP_URL: z.string().optional(),
   MAIL_FROM: z.string().default('Kern <no-reply@localhost>'),
   KERN_INSTANCE_NAME: z.string().default('Kern'),
-  /** shared secret provider webhooks must present (query `?token=` or `x-kern-webhook-token`) */
-  MAIL_WEBHOOK_TOKEN: z.string().optional(),
+  /**
+   * Shared secret provider webhooks must present (query `?token=` or `x-kern-webhook-token`).
+   *
+   * Optional on purpose, and it is not the same as unauthenticated: with no secret configured
+   * `/api/mail/webhooks/*` refuses every request. An instance that sends through SMTP has no
+   * provider to receive webhooks from and must still boot, and an existing install never re-reads
+   * the distribution's `.env.example`, so requiring it here would take mail down on upgrade for
+   * everyone who has no use for it.
+   *
+   * An unset variable and an empty one mean the same thing — Compose substitutes an unset variable
+   * as `""` — so both arrive here as `undefined` rather than as a secret equal to the empty string.
+   */
+  MAIL_WEBHOOK_TOKEN: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
 })
 export type MailEnv = z.infer<typeof MailEnv>
 

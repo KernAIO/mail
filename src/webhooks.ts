@@ -4,6 +4,7 @@
  * sends skip the address.
  */
 
+import { createHash, createVerify, type KeyObject, timingSafeEqual, X509Certificate } from 'node:crypto'
 import type { Kernel } from '@kernhq/kernel'
 import { addSuppression, deliveries, emitDeliveryEvent, mailEvents } from '@kernhq/module-mail/server'
 import { eq } from 'drizzle-orm'
@@ -112,26 +113,175 @@ function normalise(provider: string, body: Record<string, any>): Normalised {
 
 const PROVIDERS = ['mailgun', 'postmark', 'ses', 'resend'] as const
 
+/**
+ * Compares a presented secret with the configured one in time that does not depend on how much of
+ * it is right. Both sides are hashed first so the comparison is over two equal-length digests and
+ * the length of the secret leaks no more than the digest does.
+ */
+function secretsMatch(presented: string, expected: string): boolean {
+  const a = createHash('sha256').update(presented).digest()
+  const b = createHash('sha256').update(expected).digest()
+  return timingSafeEqual(a, b)
+}
+
+/**
+ * Amazon SNS carries SES events, and confirming a subscription means this service fetches a URL the
+ * *caller* chose — a request made from inside the private network, where a link-local metadata
+ * address answers. So every URL taken out of a webhook body has to be an SNS endpoint over TLS
+ * before anything leaves the process, and that is the only reason this regexp exists.
+ */
+const SNS_HOST = /^sns\.[a-z0-9-]+\.amazonaws\.com$/
+
+/** The URL when it is an Amazon SNS endpoint we may call, `null` for anything else. */
+function snsUrl(raw: unknown): URL | null {
+  if (typeof raw !== 'string' || !raw) return null
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return null
+  }
+  // `https://sns.eu-west-1.amazonaws.com@attacker.example/` parses with hostname `attacker.example`,
+  // so the host test below already refuses it; credentials and a port are refused on their own
+  // because a genuine SNS URL carries neither.
+  if (url.protocol !== 'https:' || url.port !== '' || url.username || url.password) return null
+  return SNS_HOST.test(url.hostname) ? url : null
+}
+
+/** The fields SNS signs, in the order it signs them. `Subject` is present only on some notifications. */
+const SNS_SIGNED_FIELDS: Record<string, readonly string[]> = {
+  Notification: ['Message', 'MessageId', 'Subject', 'Timestamp', 'TopicArn', 'Type'],
+  SubscriptionConfirmation: [
+    'Message',
+    'MessageId',
+    'SubscribeURL',
+    'Timestamp',
+    'Token',
+    'TopicArn',
+    'Type',
+  ],
+  UnsubscribeConfirmation: ['Message', 'MessageId', 'SubscribeURL', 'Timestamp', 'Token', 'TopicArn', 'Type'],
+}
+
+/** The canonical string SNS signed, or `null` when the body is not a signable SNS envelope. */
+export function snsStringToSign(body: Record<string, unknown>): string | null {
+  const fields = SNS_SIGNED_FIELDS[typeof body.Type === 'string' ? body.Type : '']
+  if (!fields) return null
+  let out = ''
+  for (const key of fields) {
+    const value = body[key]
+    if (typeof value !== 'string') {
+      // `Subject` is the one field SNS omits when it is absent; anything else missing means this is
+      // not the envelope it claims to be.
+      if (key === 'Subject') continue
+      return null
+    }
+    out += `${key}\n${value}\n`
+  }
+  return out
+}
+
+/**
+ * Verifies the RSA signature SNS puts on every message against the public key of its signing
+ * certificate. Exported so it can be tested with a locally generated key: the certificate itself can
+ * only be fetched from Amazon.
+ */
+export function verifySnsSignature(body: Record<string, unknown>, publicKey: KeyObject | string): boolean {
+  const stringToSign = snsStringToSign(body)
+  if (!stringToSign) return false
+  const version = typeof body.SignatureVersion === 'string' ? body.SignatureVersion : '1'
+  const algorithm = version === '2' ? 'RSA-SHA256' : version === '1' ? 'RSA-SHA1' : null
+  if (!algorithm) return false
+  if (typeof body.Signature !== 'string' || !body.Signature) return false
+  try {
+    return createVerify(algorithm).update(stringToSign, 'utf8').verify(publicKey, body.Signature, 'base64')
+  } catch {
+    return false
+  }
+}
+
+/** Signing certificates, keyed by URL. SNS rotates them rarely and reuses one across many messages. */
+const snsKeys = new Map<string, KeyObject>()
+
+/** The public key of an SNS signing certificate, or `null` if the URL or the certificate is not one. */
+async function snsPublicKey(rawUrl: unknown): Promise<KeyObject | null> {
+  const url = snsUrl(rawUrl)
+  if (!url) return null
+  const cached = snsKeys.get(url.href)
+  if (cached) return cached
+  try {
+    const res = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(5_000) })
+    if (!res.ok) return null
+    const key = new X509Certificate(await res.text()).publicKey
+    // A caller picks the URL, so the cache is capped rather than left to grow.
+    if (snsKeys.size >= 16) snsKeys.clear()
+    snsKeys.set(url.href, key)
+    return key
+  } catch {
+    return null
+  }
+}
+
 export function mountWebhooks(app: FastifyInstance, kernel: Kernel, env: MailEnv): void {
+  const configuredToken = env.MAIL_WEBHOOK_TOKEN
+  if (!configuredToken) {
+    kernel.log.warn(
+      'MAIL_WEBHOOK_TOKEN is not set, so provider webhooks refuse every request. Set it and register the webhook URL with ?token=<the same value>.',
+    )
+  }
   app.post<{ Params: { provider: string }; Querystring: { token?: string } }>(
     '/api/mail/webhooks/:provider',
     async (req, reply) => {
+      // Providers cannot present a Kern session, so webhook URLs carry a shared secret instead. With
+      // no secret configured there is nothing anyone could prove, so every request is refused: this
+      // endpoint writes suppressions, and a suppression a stranger wrote silently stops that
+      // person's password resets, magic links and invitations for good.
+      if (!configuredToken) {
+        return reply
+          .status(401)
+          .send({ code: 'UNAUTHORIZED', message: 'Provider webhooks are not configured' })
+      }
+      const header = req.headers['x-kern-webhook-token']
+      const presented = req.query.token ?? (Array.isArray(header) ? header[0] : header)
+      if (typeof presented !== 'string' || !secretsMatch(presented, configuredToken)) {
+        return reply.status(401).send({ code: 'UNAUTHORIZED', message: 'Invalid webhook token' })
+      }
+
       const provider = req.params.provider
       if (!PROVIDERS.includes(provider as (typeof PROVIDERS)[number])) {
         return reply.status(404).send({ code: 'NOT_FOUND', message: 'Unknown provider' })
       }
-      // Providers cannot present a Kern session, so webhook URLs carry a shared secret instead.
-      if (env.MAIL_WEBHOOK_TOKEN) {
-        const presented = req.query.token ?? req.headers['x-kern-webhook-token']
-        if (presented !== env.MAIL_WEBHOOK_TOKEN) {
-          return reply.status(401).send({ code: 'UNAUTHORIZED', message: 'Invalid webhook token' })
-        }
-      }
       const body = (req.body ?? {}) as Record<string, any>
-      // SES subscription confirmation
-      if (body.Type === 'SubscriptionConfirmation' && typeof body.SubscribeURL === 'string') {
-        await fetch(body.SubscribeURL).catch(() => {})
+      const snsType = typeof body.Type === 'string' ? body.Type : null
+
+      // An SNS envelope is signed, and a subscription confirmation makes this service fetch a URL
+      // out of the body — so the URL is checked before the signature (nothing leaves the process for
+      // a URL we would never call) and the signature before the fetch.
+      if (snsType === 'SubscriptionConfirmation') {
+        const subscribeUrl = snsUrl(body.SubscribeURL)
+        if (!subscribeUrl) {
+          kernel.log.warn(
+            { provider },
+            'refused an SNS confirmation whose SubscribeURL is not an SNS endpoint',
+          )
+          return reply
+            .status(400)
+            .send({ code: 'BAD_REQUEST', message: 'SubscribeURL is not an Amazon SNS endpoint' })
+        }
+        const key = await snsPublicKey(body.SigningCertURL)
+        if (!key || !verifySnsSignature(body, key)) {
+          return reply.status(400).send({ code: 'BAD_REQUEST', message: 'SNS signature did not verify' })
+        }
+        await fetch(subscribeUrl, { redirect: 'error', signal: AbortSignal.timeout(10_000) }).catch(() => {})
         return { ok: true, confirmed: true }
+      }
+      // A notification that presents a signature has to have a real one. One that presents none is a
+      // provider posting its own shape (Postmark, Mailgun, Resend) and is held up by the token alone.
+      if (snsType === 'Notification' && body.Signature !== undefined) {
+        const key = await snsPublicKey(body.SigningCertURL)
+        if (!key || !verifySnsSignature(body, key)) {
+          return reply.status(400).send({ code: 'BAD_REQUEST', message: 'SNS signature did not verify' })
+        }
       }
 
       const n = normalise(provider, body)

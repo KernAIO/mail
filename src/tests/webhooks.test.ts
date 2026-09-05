@@ -5,7 +5,7 @@
 import type { Tx } from '@kernhq/kernel'
 import { deliveries, loadSuppressed, suppressions } from '@kernhq/module-mail/server'
 import { eq } from 'drizzle-orm'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { recipient, startMail, type TestMail } from '../testing/harness.js'
 
 let mail: TestMail
@@ -64,6 +64,16 @@ describe('authentication and routing', () => {
   it('refuses a request without the shared secret', async () => {
     expect((await post('postmark', { RecordType: 'Delivery' }, '')).status).toBe(401)
     expect((await post('postmark', { RecordType: 'Delivery' }, '?token=wrong')).status).toBe(401)
+    // a prefix of the real secret is as wrong as anything else
+    expect((await post('postmark', { RecordType: 'Delivery' }, `?token=${TOKEN.slice(0, -1)}`)).status).toBe(
+      401,
+    )
+    const noHeader = await fetch(`${baseUrl}/api/mail/webhooks/postmark`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ RecordType: 'Delivery' }),
+    })
+    expect(noHeader.status).toBe(401)
   })
 
   it('accepts the secret in a header as well as the query string', async () => {
@@ -74,6 +84,127 @@ describe('authentication and routing', () => {
     })
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ ok: true, ignored: true })
+  })
+
+  it('accepts the correct secret in the query string', async () => {
+    const res = await post('postmark', { RecordType: 'Open' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, ignored: true })
+  })
+})
+
+/**
+ * The shipped distribution used to leave `MAIL_WEBHOOK_TOKEN` unset, and the route then skipped the
+ * check altogether — so anyone on the internet could write an instance-wide suppression and stop a
+ * person's password resets. With nothing to prove against, the endpoint refuses everything.
+ */
+describe('an instance with no webhook token configured', () => {
+  let unconfigured: TestMail
+  let url: string
+
+  beforeAll(async () => {
+    unconfigured = await startMail({ env: { MAIL_WEBHOOK_TOKEN: undefined } })
+    url = await unconfigured.listen()
+  })
+  afterAll(async () => {
+    await unconfigured?.stop()
+  })
+
+  it('refuses every request rather than accepting it unauthenticated', async () => {
+    const bounce = {
+      RecordType: 'Bounce',
+      Type: 'HardBounce',
+      Email: recipient('unauthenticated'),
+      Description: 'mailbox does not exist',
+    }
+    for (const query of ['', '?token=', '?token=anything']) {
+      const res = await fetch(`${url}/api/mail/webhooks/postmark${query}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(bounce),
+      })
+      expect(res.status).toBe(401)
+    }
+    // nothing was written, so the address can still be sent to
+    const written = await unconfigured.kernel.database.withWorkspace(ALL_WORKSPACES, (tx) =>
+      tx.select().from(suppressions),
+    )
+    expect(written).toEqual([])
+  })
+})
+
+/**
+ * A subscription confirmation makes this service fetch a URL out of the request body. Unchecked that
+ * is a blind SSRF from inside the private network, so only an SNS endpoint over TLS is ever called —
+ * and the refusal happens before anything leaves the process.
+ */
+describe('SNS subscription confirmation', () => {
+  const confirmation = (subscribeUrl: string, extra: Record<string, unknown> = {}) => ({
+    Type: 'SubscriptionConfirmation',
+    MessageId: 'm-1',
+    Token: 'a-token',
+    TopicArn: 'arn:aws:sns:eu-west-1:123456789012:kern-mail',
+    Message: 'You have chosen to subscribe.',
+    Timestamp: '2026-09-05T09:00:00.000Z',
+    SignatureVersion: '2',
+    Signature: 'not-a-real-signature',
+    SigningCertURL: 'https://sns.eu-west-1.amazonaws.com/SimpleNotificationService-abc123.pem',
+    SubscribeURL: subscribeUrl,
+    ...extra,
+  })
+
+  /** Runs `fn` with every outbound URL recorded, and returns the ones that did not go to this service. */
+  async function outboundDuring(fn: () => Promise<void>): Promise<string[]> {
+    const seen: string[] = []
+    const real = globalThis.fetch
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      seen.push(input instanceof Request ? input.url : String(input))
+      return real(input, init)
+    })
+    try {
+      await fn()
+    } finally {
+      spy.mockRestore()
+    }
+    return seen.filter((u) => !u.startsWith(baseUrl))
+  }
+
+  it('refuses a SubscribeURL that is not an SNS endpoint, without fetching it', async () => {
+    const hostile = [
+      'http://169.254.169.254/latest/meta-data/iam/security-credentials/',
+      'https://169.254.169.254/latest/meta-data/',
+      'http://sns.eu-west-1.amazonaws.com/?Action=ConfirmSubscription',
+      'https://sns.eu-west-1.amazonaws.com.attacker.example/?Action=ConfirmSubscription',
+      'https://attacker.example/?Action=ConfirmSubscription',
+      'https://sns.eu-west-1.amazonaws.com:8443/?Action=ConfirmSubscription',
+      'file:///etc/passwd',
+      'not a url at all',
+    ]
+    const outbound = await outboundDuring(async () => {
+      for (const subscribeUrl of hostile) {
+        const res = await post('ses', confirmation(subscribeUrl))
+        expect([subscribeUrl, res.status]).toEqual([subscribeUrl, 400])
+        expect(await res.json()).toEqual({
+          code: 'BAD_REQUEST',
+          message: 'SubscribeURL is not an Amazon SNS endpoint',
+        })
+      }
+    })
+    expect(outbound).toEqual([])
+  })
+
+  it('refuses a confirmation whose signing certificate is not an SNS endpoint', async () => {
+    const outbound = await outboundDuring(async () => {
+      const res = await post(
+        'ses',
+        confirmation('https://sns.eu-west-1.amazonaws.com/?Action=ConfirmSubscription', {
+          SigningCertURL: 'https://attacker.example/SimpleNotificationService.pem',
+        }),
+      )
+      expect(res.status).toBe(400)
+      expect(await res.json()).toEqual({ code: 'BAD_REQUEST', message: 'SNS signature did not verify' })
+    })
+    expect(outbound).toEqual([])
   })
 })
 
