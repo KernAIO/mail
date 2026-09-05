@@ -107,19 +107,33 @@ platform — account email from core, digests, module notifications — is queue
 - **A URL out of a request body is an outbound request the caller chose.** The SES branch fetched
   `SubscribeURL` as it was given — a blind SSRF from inside the private network, and
   `http://169.254.169.254/…` is the first thing anyone tries. `SubscribeURL` and `SigningCertURL`
-  must both be `https`, no port, no credentials, host matching `^sns\.[a-z0-9-]+\.amazonaws\.com$`,
-  and the SNS signature has to verify against the certificate at that URL; `fetch` uses
+  must both be `https`, no port, no credentials, host matching
+  `^sns\.[a-z0-9-]+\.amazonaws\.com(\.cn)?$` — the `.cn` is the China partition, which an earlier
+  pattern anchored on `.com` refused, and the two air-gapped partitions are deliberately left out
+  because widening an allowlist for a network nobody can test against is how it stops meaning
+  anything — and the SNS signature has to verify against the certificate at that URL; `fetch` uses
   `redirect: 'error'` so a 302 cannot walk out of the allowlist. `new URL()` does the hard part —
   `https://sns.eu-west-1.amazonaws.com@attacker.example/` has hostname `attacker.example`.
   Signature verification needs no dependency: `new X509Certificate(pem).publicKey` feeds
   `createVerify('RSA-SHA256'|'RSA-SHA1')`. Only Amazon can serve that certificate, so
   `verifySnsSignature` takes a key and `src/tests/sns-signature.test.ts` hands it a generated one.
-- **Amazon SNS posts with `Content-Type: text/plain`, and the route silently ignores it.** Fastify's
-  built-in `text/plain` parser hands the handler the raw *string*, so `body.Type` is undefined, every
-  branch misses and the answer is `200 {"ok":true,"ignored":true}` — measured, not assumed. SES
-  events over SNS therefore reach nothing today; a `text/plain` parser that JSON-parses is what
-  would fix it, and it has to be scoped to this route rather than added to the whole instance. It
-  never masked the SSRF: an attacker sends `application/json`, which is what the tests send too.
+- **A webhook the tests reach is not a webhook the provider reaches.** Amazon SNS posts JSON with
+  `Content-Type: text/plain`, and Fastify's built-in text/plain parser hands the handler the raw
+  *string* — so `body.Type` was undefined, every branch missed, and each SES bounce was answered
+  `200 {"ok":true,"ignored":true}` with nothing written. The whole SES path was dead, signature
+  verification included: it had never once executed, because it sits behind the same `body.Type`.
+  Nothing noticed for as long as it existed, because every test posted `application/json`. The
+  parser is scoped with `app.register` — a parser added on the instance itself replaces the parsers
+  for **every** route in the service, and the symptom is every oRPC body arriving as `undefined` —
+  and `webhooks.test.ts` posts the way SNS does, with a generated signing certificate served to the
+  one fetch the route makes. When a provider's shape is only ever exercised by a fixture we wrote,
+  send the request the provider sends, headers included.
+- **`JSON.parse` on a request body is a 500 waiting to happen.** `normalise('ses', …)` parsed
+  `Message` unguarded, so a `Message` that is not JSON — or is `null`, a number or an array — threw a
+  `SyntaxError` out of the handler and the service reported the caller's mistake as its own. It reads
+  the body once, answers 400, and `UnsubscribeConfirmation` is acknowledged before it gets there:
+  SNS puts plain English in `Message` for that one, and 400 to a message Amazon considers well formed
+  is a delivery failure in their dashboard.
 - `deliveries`, `suppressions` and `inbound_routes` carry a **forced row-level policy** since
   `@kernhq/module-mail` 0.5.0 (they carried none before, and this note argued for it). The policy
   admits a row for its own workspace or for the `'*'` binding; this service's webhook handler and

@@ -2,11 +2,17 @@
  * Provider webhooks. Each provider reports deliveries and bounces in its own shape; the service
  * normalises them into a delivery status plus, for hard failures, a suppression entry.
  */
+import { execFileSync } from 'node:child_process'
+import { createPrivateKey, createSign, type KeyObject } from 'node:crypto'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { Tx } from '@kernhq/kernel'
 import { deliveries, loadSuppressed, suppressions } from '@kernhq/module-mail/server'
 import { eq } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { recipient, startMail, type TestMail } from '../testing/harness.js'
+import { snsStringToSign } from '../webhooks.js'
 
 let mail: TestMail
 let baseUrl: string
@@ -16,6 +22,14 @@ const post = (provider: string, body: unknown, query = `?token=${TOKEN}`) =>
   fetch(`${baseUrl}/api/mail/webhooks/${provider}${query}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+/** The same request Amazon SNS makes: JSON, labelled `text/plain`. */
+const postAsSns = (provider: string, body: unknown, query = `?token=${TOKEN}`) =>
+  fetch(`${baseUrl}/api/mail/webhooks/${provider}${query}`, {
+    method: 'POST',
+    headers: { 'content-type': 'text/plain; charset=UTF-8' },
     body: JSON.stringify(body),
   })
 
@@ -175,6 +189,8 @@ describe('SNS subscription confirmation', () => {
       'https://169.254.169.254/latest/meta-data/',
       'http://sns.eu-west-1.amazonaws.com/?Action=ConfirmSubscription',
       'https://sns.eu-west-1.amazonaws.com.attacker.example/?Action=ConfirmSubscription',
+      // the China partition is allowed, so its suffix is worth a hostile case of its own
+      'https://sns.cn-north-1.amazonaws.com.cn.attacker.example/?Action=ConfirmSubscription',
       'https://attacker.example/?Action=ConfirmSubscription',
       'https://sns.eu-west-1.amazonaws.com:8443/?Action=ConfirmSubscription',
       'file:///etc/passwd',
@@ -205,6 +221,196 @@ describe('SNS subscription confirmation', () => {
       expect(await res.json()).toEqual({ code: 'BAD_REQUEST', message: 'SNS signature did not verify' })
     })
     expect(outbound).toEqual([])
+  })
+
+  /**
+   * SNS in Beijing and Ningxia answers on `amazonaws.com.cn`, which a pattern anchored on `.com`
+   * refuses — so an instance in that partition could never confirm a subscription. The URL is
+   * accepted now; the request still stops at the signature, which is what the message proves.
+   */
+  it('accepts the China partition’s host and still demands a signature', async () => {
+    const res = await post(
+      'ses',
+      confirmation('https://sns.cn-north-1.amazonaws.com.cn/?Action=ConfirmSubscription', {
+        SigningCertURL: 'https://sns.cn-north-1.amazonaws.com.cn/SimpleNotificationService-abc.pem',
+      }),
+    )
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ code: 'BAD_REQUEST', message: 'SNS signature did not verify' })
+  })
+})
+
+/**
+ * Amazon SNS posts JSON labelled `Content-Type: text/plain`, and Fastify's built-in text/plain parser
+ * hands the handler the raw string — so `body.Type` was undefined, every branch missed, and an SES
+ * bounce was answered `200 {"ok":true,"ignored":true}` with nothing written. Signature verification
+ * sat behind the same `body.Type` and had therefore never run against a real SNS request.
+ *
+ * Only Amazon can serve the genuine signing certificate, so these tests generate one and answer the
+ * single fetch the route makes for it. Everything else — the parse, the envelope, the signature, the
+ * delivery row — is the real path.
+ */
+describe('an SNS notification posted as text/plain', () => {
+  const CERT_URL = 'https://sns.eu-west-1.amazonaws.com/SimpleNotificationService-textplain.pem'
+  let certificate: string
+  let privateKey: KeyObject
+  let restoreFetch: () => void
+
+  /** A throwaway self-signed certificate: `X509Certificate` parses only a real one. */
+  function selfSigned(): { certificate: string; privateKey: KeyObject } {
+    const dir = mkdtempSync(join(tmpdir(), 'kern-sns-'))
+    try {
+      execFileSync(
+        'openssl',
+        // biome-ignore format: one switch per line is unreadable
+        ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+          '-subj', '/CN=sns.eu-west-1.amazonaws.com',
+          '-keyout', join(dir, 'key.pem'), '-out', join(dir, 'cert.pem')],
+        { stdio: 'ignore' },
+      )
+      return {
+        certificate: readFileSync(join(dir, 'cert.pem'), 'utf8'),
+        privateKey: createPrivateKey(readFileSync(join(dir, 'key.pem'))),
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  /** Signs an envelope the way SNS does, over the canonical string the verifier rebuilds. */
+  const sign = (body: Record<string, unknown>) => {
+    const stringToSign = snsStringToSign(body)
+    if (!stringToSign) throw new Error('fixture is not a signable SNS envelope')
+    return {
+      ...body,
+      Signature: createSign('RSA-SHA256').update(stringToSign, 'utf8').sign(privateKey, 'base64'),
+    }
+  }
+
+  const notification = (message: unknown) =>
+    sign({
+      Type: 'Notification',
+      MessageId: `m-${Date.now()}`,
+      TopicArn: 'arn:aws:sns:eu-west-1:123456789012:kern-mail',
+      Message: typeof message === 'string' ? message : JSON.stringify(message),
+      Timestamp: '2026-09-05T09:00:00.000Z',
+      SignatureVersion: '2',
+      SigningCertURL: CERT_URL,
+    })
+
+  beforeAll(() => {
+    ;({ certificate, privateKey } = selfSigned())
+    const real = globalThis.fetch
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url === CERT_URL) return Promise.resolve(new Response(certificate, { status: 200 }))
+      return real(input, init)
+    })
+    restoreFetch = () => spy.mockRestore()
+  })
+  afterAll(() => restoreFetch?.())
+
+  it('parses the body, verifies the signature and records the bounce', async () => {
+    const to = recipient('ses-text-plain')
+    const row = await sentDelivery(to, `ses-tp-${Date.now()}`)
+
+    const res = await postAsSns(
+      'ses',
+      notification({
+        notificationType: 'Bounce',
+        bounce: {
+          bounceType: 'Permanent',
+          bouncedRecipients: [{ emailAddress: to, diagnosticCode: '550 no such mailbox' }],
+        },
+        mail: { messageId: row.providerMessageId, destination: [to] },
+      }),
+    )
+    expect(res.status).toBe(200)
+    // before the parser existed this was `{ ok: true, ignored: true }` and the row stayed sent
+    expect(await res.json()).toEqual({ ok: true })
+    const updated = await reload(row.id)
+    expect(updated.status).toBe('bounced')
+    expect(updated.error).toBe('550 no such mailbox')
+    expect([...(await loadSuppressed(mail.kernel, mail.workspaceId, [to]))]).toEqual([to.toLowerCase()])
+  })
+
+  it('refuses a text/plain notification whose signature does not cover the body', async () => {
+    const to = recipient('ses-text-plain-forged')
+    const row = await sentDelivery(to, `ses-tpf-${Date.now()}`)
+    const signed = notification({ notificationType: 'Delivery', mail: { messageId: 'something else' } })
+
+    // the envelope is signed, then the payload is swapped — exactly what the signature exists to catch
+    const forged = {
+      ...signed,
+      Message: JSON.stringify({
+        notificationType: 'Bounce',
+        bounce: { bounceType: 'Permanent', bouncedRecipients: [{ emailAddress: to }] },
+        mail: { messageId: row.providerMessageId, destination: [to] },
+      }),
+    }
+    const res = await postAsSns('ses', forged)
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ code: 'BAD_REQUEST', message: 'SNS signature did not verify' })
+    expect((await reload(row.id)).status).toBe('sent')
+    expect([...(await loadSuppressed(mail.kernel, mail.workspaceId, [to]))]).toEqual([])
+  })
+
+  /**
+   * The parser is added inside `app.register`, which encapsulates it. A parser added on the instance
+   * itself replaces the parsers for every route in the service, and the symptom is every oRPC request
+   * body arriving as `undefined` — so this asks a module procedure a question it can only refuse
+   * after reading the body.
+   */
+  it('leaves the module’s own routes reading their own bodies', async () => {
+    const res = await fetch(`${baseUrl}/api/mail/rpc/settings/get`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ json: { workspaceId: mail.workspaceId } }),
+    })
+    expect(res.status).toBe(401)
+    expect((await res.json()) as { json: { code: string } }).toMatchObject({
+      json: { code: 'UNAUTHORIZED' },
+    })
+  })
+
+  it('acknowledges an unsubscribe confirmation instead of reading it as an SES event', async () => {
+    const res = await postAsSns('ses', {
+      Type: 'UnsubscribeConfirmation',
+      MessageId: 'm-unsub',
+      Token: 'a-token',
+      TopicArn: 'arn:aws:sns:eu-west-1:123456789012:kern-mail',
+      Message: 'You have chosen to deactivate the subscription.',
+      SubscribeURL: 'https://sns.eu-west-1.amazonaws.com/?Action=ConfirmSubscription',
+      Timestamp: '2026-09-05T09:00:00.000Z',
+    })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, ignored: true })
+  })
+})
+
+/** A body the service cannot read is the caller's mistake, and used to be reported as ours. */
+describe('a body that is not a readable SES event', () => {
+  it('answers 400 rather than 500 when Message is not JSON', async () => {
+    for (const message of ['not json at all', '"a string"', 'null', '[1,2,3]']) {
+      const res = await post('ses', { Message: message })
+      expect([message, res.status]).toEqual([message, 400])
+      expect(await res.json()).toEqual({
+        code: 'BAD_REQUEST',
+        message: 'The SES event could not be read from Message',
+      })
+    }
+  })
+
+  it('answers 400 when the body itself is not a JSON object', async () => {
+    for (const raw of ['', 'not json at all', '"a string"', '[1,2,3]', 'null']) {
+      const res = await fetch(`${baseUrl}/api/mail/webhooks/postmark?token=${TOKEN}`, {
+        method: 'POST',
+        headers: { 'content-type': 'text/plain' },
+        body: raw,
+      })
+      expect([raw, res.status]).toEqual([raw, 400])
+      expect(await res.json()).toEqual({ code: 'BAD_REQUEST', message: 'Body is not a JSON object' })
+    }
   })
 })
 

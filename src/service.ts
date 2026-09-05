@@ -50,7 +50,7 @@ export async function createMailService(opts: MailServiceOptions = {}): Promise<
       corsOrigins,
       openapi: { title: 'Kern', version: kernel.version },
       extend: async (fastify) => {
-        mountWebhooks(fastify, kernel, env)
+        await mountWebhooks(fastify, kernel, env)
       },
     })
   }

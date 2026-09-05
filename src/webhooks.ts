@@ -20,6 +20,25 @@ type Normalised = {
 
 const asString = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
 
+/** A plain JSON object, or `null` for anything else — an array and `null` included. */
+const asObject = (v: unknown): Record<string, any> | null =>
+  typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, any>) : null
+
+/**
+ * The SES event itself. SNS wraps it as a **string** in `Message`, so reading it means parsing JSON
+ * out of a request body — and a body that does not parse used to throw a `SyntaxError` out of the
+ * handler, which the error handler answers 500 to. It is the caller's mistake, not the service's, so
+ * this returns `null` and the route answers 400.
+ */
+function sesMessage(body: Record<string, any>): Record<string, any> | null {
+  if (typeof body.Message !== 'string') return asObject(body.Message) ?? asObject(body)
+  try {
+    return asObject(JSON.parse(body.Message))
+  } catch {
+    return null
+  }
+}
+
 /**
  * The binding `mod_mail`'s row-level policies admit for instance-wide work. Written here rather
  * than imported so this service builds against a module version from before the policies existed
@@ -28,7 +47,8 @@ const asString = (v: unknown): string | null => (typeof v === 'string' && v ? v 
  */
 const ALL_WORKSPACES = '*'
 
-function normalise(provider: string, body: Record<string, any>): Normalised {
+/** The event this body reports, or `null` when the body is not readable and the route must answer 400. */
+function normalise(provider: string, body: Record<string, any>): Normalised | null {
   switch (provider) {
     case 'mailgun': {
       const e = body['event-data'] ?? {}
@@ -68,7 +88,8 @@ function normalise(provider: string, body: Record<string, any>): Normalised {
       }
     }
     case 'ses': {
-      const message = typeof body.Message === 'string' ? JSON.parse(body.Message) : (body.Message ?? body)
+      const message = sesMessage(body)
+      if (!message) return null
       const type = asString(message.notificationType ?? message.eventType)
       const recipient =
         asString(message.bounce?.bouncedRecipients?.[0]?.emailAddress) ??
@@ -129,8 +150,15 @@ function secretsMatch(presented: string, expected: string): boolean {
  * *caller* chose — a request made from inside the private network, where a link-local metadata
  * address answers. So every URL taken out of a webhook body has to be an SNS endpoint over TLS
  * before anything leaves the process, and that is the only reason this regexp exists.
+ *
+ * The `.cn` suffix is the China partition — `sns.cn-north-1.amazonaws.com.cn` — which is Amazon's
+ * own domain there and was refused by an earlier pattern anchored on `.com`. The two air-gapped
+ * partitions (`c2s.ic.gov`, `sc2s.sgov.gov`) are deliberately **not** here: an instance that can
+ * reach them is not an instance that reached this code from the public internet, and widening an
+ * allowlist for a network nobody here can test against is how an allowlist stops meaning anything.
+ * An operator in one of those partitions has to change this line, and should.
  */
-const SNS_HOST = /^sns\.[a-z0-9-]+\.amazonaws\.com$/
+const SNS_HOST = /^sns\.[a-z0-9-]+\.amazonaws\.com(\.cn)?$/
 
 /** The URL when it is an Amazon SNS endpoint we may call, `null` for anything else. */
 function snsUrl(raw: unknown): URL | null {
@@ -222,112 +250,161 @@ async function snsPublicKey(rawUrl: unknown): Promise<KeyObject | null> {
   }
 }
 
-export function mountWebhooks(app: FastifyInstance, kernel: Kernel, env: MailEnv): void {
+/**
+ * Reads a request body as JSON whatever the provider labelled it.
+ *
+ * A body that does not parse is handed back **as the string it was**, rather than raised as a parser
+ * error: the route then answers it in the same shape as every other refusal here, instead of leaving
+ * Fastify to invent one.
+ */
+function parseJsonBody(_req: unknown, raw: string, done: (err: Error | null, body?: unknown) => void): void {
+  try {
+    done(null, JSON.parse(raw))
+  } catch {
+    done(null, raw)
+  }
+}
+
+export async function mountWebhooks(app: FastifyInstance, kernel: Kernel, env: MailEnv): Promise<void> {
   const configuredToken = env.MAIL_WEBHOOK_TOKEN
   if (!configuredToken) {
     kernel.log.warn(
       'MAIL_WEBHOOK_TOKEN is not set, so provider webhooks refuse every request. Set it and register the webhook URL with ?token=<the same value>.',
     )
   }
-  app.post<{ Params: { provider: string }; Querystring: { token?: string } }>(
-    '/api/mail/webhooks/:provider',
-    async (req, reply) => {
-      // Providers cannot present a Kern session, so webhook URLs carry a shared secret instead. With
-      // no secret configured there is nothing anyone could prove, so every request is refused: this
-      // endpoint writes suppressions, and a suppression a stranger wrote silently stops that
-      // person's password resets, magic links and invitations for good.
-      if (!configuredToken) {
-        return reply
-          .status(401)
-          .send({ code: 'UNAUTHORIZED', message: 'Provider webhooks are not configured' })
-      }
-      const header = req.headers['x-kern-webhook-token']
-      const presented = req.query.token ?? (Array.isArray(header) ? header[0] : header)
-      if (typeof presented !== 'string' || !secretsMatch(presented, configuredToken)) {
-        return reply.status(401).send({ code: 'UNAUTHORIZED', message: 'Invalid webhook token' })
-      }
+  /*
+   * The route lives in its own encapsulated scope so it can parse a `text/plain` body as JSON.
+   *
+   * Amazon SNS posts `Content-Type: text/plain` — JSON with the wrong label — and Fastify's built-in
+   * text/plain parser hands the handler the raw **string**. `body.Type` was therefore undefined, the
+   * SNS branches never ran, `normalise` read nothing, and every SES bounce and complaint was
+   * answered `200 {"ok":true,"ignored":true}` while nothing was recorded. Signature verification sat
+   * behind the same `body.Type` and had never once executed.
+   *
+   * `app.register` is what keeps this to this route: content type parsers are encapsulated, so
+   * replacing them here changes nothing for the oRPC routes beside it — a parser added on `app`
+   * itself would replace theirs and every request body in the service would arrive as `undefined`.
+   */
+  await app.register(async (scope) => {
+    scope.removeAllContentTypeParsers()
+    for (const contentType of ['application/json', 'text/plain'])
+      scope.addContentTypeParser(contentType, { parseAs: 'string' }, parseJsonBody)
+    scope.post<{ Params: { provider: string }; Querystring: { token?: string } }>(
+      '/api/mail/webhooks/:provider',
+      async (req, reply) => {
+        // Providers cannot present a Kern session, so webhook URLs carry a shared secret instead. With
+        // no secret configured there is nothing anyone could prove, so every request is refused: this
+        // endpoint writes suppressions, and a suppression a stranger wrote silently stops that
+        // person's password resets, magic links and invitations for good.
+        if (!configuredToken) {
+          return reply
+            .status(401)
+            .send({ code: 'UNAUTHORIZED', message: 'Provider webhooks are not configured' })
+        }
+        const header = req.headers['x-kern-webhook-token']
+        const presented = req.query.token ?? (Array.isArray(header) ? header[0] : header)
+        if (typeof presented !== 'string' || !secretsMatch(presented, configuredToken)) {
+          return reply.status(401).send({ code: 'UNAUTHORIZED', message: 'Invalid webhook token' })
+        }
 
-      const provider = req.params.provider
-      if (!PROVIDERS.includes(provider as (typeof PROVIDERS)[number])) {
-        return reply.status(404).send({ code: 'NOT_FOUND', message: 'Unknown provider' })
-      }
-      const body = (req.body ?? {}) as Record<string, any>
-      const snsType = typeof body.Type === 'string' ? body.Type : null
+        const provider = req.params.provider
+        if (!PROVIDERS.includes(provider as (typeof PROVIDERS)[number])) {
+          return reply.status(404).send({ code: 'NOT_FOUND', message: 'Unknown provider' })
+        }
+        // Everything below reads fields off the body, so it has to be an object. A body that did not
+        // parse arrives here as the string it was, and a JSON `null`, number or array as itself.
+        const body = asObject(req.body)
+        if (!body) {
+          return reply.status(400).send({ code: 'BAD_REQUEST', message: 'Body is not a JSON object' })
+        }
+        const snsType = typeof body.Type === 'string' ? body.Type : null
 
-      // An SNS envelope is signed, and a subscription confirmation makes this service fetch a URL
-      // out of the body — so the URL is checked before the signature (nothing leaves the process for
-      // a URL we would never call) and the signature before the fetch.
-      if (snsType === 'SubscriptionConfirmation') {
-        const subscribeUrl = snsUrl(body.SubscribeURL)
-        if (!subscribeUrl) {
-          kernel.log.warn(
-            { provider },
-            'refused an SNS confirmation whose SubscribeURL is not an SNS endpoint',
+        // An SNS envelope is signed, and a subscription confirmation makes this service fetch a URL
+        // out of the body — so the URL is checked before the signature (nothing leaves the process for
+        // a URL we would never call) and the signature before the fetch.
+        if (snsType === 'SubscriptionConfirmation') {
+          const subscribeUrl = snsUrl(body.SubscribeURL)
+          if (!subscribeUrl) {
+            kernel.log.warn(
+              { provider },
+              'refused an SNS confirmation whose SubscribeURL is not an SNS endpoint',
+            )
+            return reply
+              .status(400)
+              .send({ code: 'BAD_REQUEST', message: 'SubscribeURL is not an Amazon SNS endpoint' })
+          }
+          const key = await snsPublicKey(body.SigningCertURL)
+          if (!key || !verifySnsSignature(body, key)) {
+            return reply.status(400).send({ code: 'BAD_REQUEST', message: 'SNS signature did not verify' })
+          }
+          await fetch(subscribeUrl, { redirect: 'error', signal: AbortSignal.timeout(10_000) }).catch(
+            () => {},
           )
+          return { ok: true, confirmed: true }
+        }
+        // SNS says so in plain English when a subscription is removed, and there is nothing to do about
+        // it here. Acknowledge it rather than letting it fall through to the SES reader, which would
+        // answer 400 to a message Amazon considers perfectly well formed.
+        if (snsType === 'UnsubscribeConfirmation') return { ok: true, ignored: true }
+        // A notification that presents a signature has to have a real one. One that presents none is a
+        // provider posting its own shape (Postmark, Mailgun, Resend) and is held up by the token alone.
+        if (snsType === 'Notification' && body.Signature !== undefined) {
+          const key = await snsPublicKey(body.SigningCertURL)
+          if (!key || !verifySnsSignature(body, key)) {
+            return reply.status(400).send({ code: 'BAD_REQUEST', message: 'SNS signature did not verify' })
+          }
+        }
+
+        const n = normalise(provider, body)
+        if (!n) {
           return reply
             .status(400)
-            .send({ code: 'BAD_REQUEST', message: 'SubscribeURL is not an Amazon SNS endpoint' })
+            .send({ code: 'BAD_REQUEST', message: 'The SES event could not be read from Message' })
         }
-        const key = await snsPublicKey(body.SigningCertURL)
-        if (!key || !verifySnsSignature(body, key)) {
-          return reply.status(400).send({ code: 'BAD_REQUEST', message: 'SNS signature did not verify' })
-        }
-        await fetch(subscribeUrl, { redirect: 'error', signal: AbortSignal.timeout(10_000) }).catch(() => {})
-        return { ok: true, confirmed: true }
-      }
-      // A notification that presents a signature has to have a real one. One that presents none is a
-      // provider posting its own shape (Postmark, Mailgun, Resend) and is held up by the token alone.
-      if (snsType === 'Notification' && body.Signature !== undefined) {
-        const key = await snsPublicKey(body.SigningCertURL)
-        if (!key || !verifySnsSignature(body, key)) {
-          return reply.status(400).send({ code: 'BAD_REQUEST', message: 'SNS signature did not verify' })
-        }
-      }
+        if (n.event === 'ignored') return { ok: true, ignored: true }
 
-      const n = normalise(provider, body)
-      if (n.event === 'ignored') return { ok: true, ignored: true }
+        // A provider reports on every workspace's mail at once, so this binds every workspace: the
+        // module's row-level policies admit `'*'` and refuse a transaction that binds nothing.
+        const row = n.providerMessageId
+          ? (
+              await kernel.database.withWorkspace(ALL_WORKSPACES, (tx) =>
+                tx
+                  .select()
+                  .from(deliveries)
+                  .where(eq(deliveries.providerMessageId, n.providerMessageId as string))
+                  .limit(1),
+              )
+            )[0]
+          : undefined
 
-      // A provider reports on every workspace's mail at once, so this binds every workspace: the
-      // module's row-level policies admit `'*'` and refuse a transaction that binds nothing.
-      const row = n.providerMessageId
-        ? (
-            await kernel.database.withWorkspace(ALL_WORKSPACES, (tx) =>
-              tx
-                .select()
-                .from(deliveries)
-                .where(eq(deliveries.providerMessageId, n.providerMessageId as string))
-                .limit(1),
-            )
-          )[0]
-        : undefined
-
-      if (row) {
-        const status = n.event === 'delivered' ? 'sent' : n.event === 'bounced' ? 'bounced' : 'failed'
-        await kernel.database.withWorkspace(ALL_WORKSPACES, (tx) =>
-          tx
-            .update(deliveries)
-            .set({ status, error: n.reason, updatedAt: new Date() })
-            .where(eq(deliveries.id, row.id)),
-        )
-        if (n.event !== 'delivered') {
-          await emitDeliveryEvent(
-            kernel,
-            n.event === 'bounced' ? mailEvents.deliveryBounced : mailEvents.deliveryFailed,
-            { id: row.id, workspaceId: row.workspaceId, to: row.to },
-            { error: n.reason ?? undefined },
+        if (row) {
+          const status = n.event === 'delivered' ? 'sent' : n.event === 'bounced' ? 'bounced' : 'failed'
+          await kernel.database.withWorkspace(ALL_WORKSPACES, (tx) =>
+            tx
+              .update(deliveries)
+              .set({ status, error: n.reason, updatedAt: new Date() })
+              .where(eq(deliveries.id, row.id)),
           )
+          if (n.event !== 'delivered') {
+            await emitDeliveryEvent(
+              kernel,
+              n.event === 'bounced' ? mailEvents.deliveryBounced : mailEvents.deliveryFailed,
+              { id: row.id, workspaceId: row.workspaceId, to: row.to },
+              { error: n.reason ?? undefined },
+            )
+          }
         }
-      }
-      if (n.recipient && (n.event === 'bounced' || n.event === 'complained')) {
-        await addSuppression(kernel, {
-          workspaceId: row?.workspaceId ?? null,
-          email: n.recipient,
-          reason: n.event === 'complained' ? 'complaint' : 'bounce',
-          source: provider,
-        })
-      }
-      kernel.log.info({ provider, event: n.event, recipient: n.recipient }, 'mail webhook')
-      return { ok: true }
-    },
-  )
+        if (n.recipient && (n.event === 'bounced' || n.event === 'complained')) {
+          await addSuppression(kernel, {
+            workspaceId: row?.workspaceId ?? null,
+            email: n.recipient,
+            reason: n.event === 'complained' ? 'complaint' : 'bounce',
+            source: provider,
+          })
+        }
+        kernel.log.info({ provider, event: n.event, recipient: n.recipient }, 'mail webhook')
+        return { ok: true }
+      },
+    )
+  })
 }
