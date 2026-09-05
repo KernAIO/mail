@@ -39,11 +39,12 @@ const postAsSns = (provider: string, body: unknown, query = `?token=${TOKEN}`) =
  * mail at once. Against a module version from before the policies the binding is inert.
  */
 const ALL_WORKSPACES = '*'
-const unbound = <T>(fn: (tx: Tx) => Promise<T>) => mail.kernel.database.withWorkspace(ALL_WORKSPACES, fn)
+const allWorkspaces = <T>(fn: (tx: Tx) => Promise<T>) =>
+  mail.kernel.database.withWorkspace(ALL_WORKSPACES, fn)
 
 /** A delivery row already marked sent, as it would be after the provider accepted it. */
 async function sentDelivery(to: string, providerMessageId: string) {
-  const [row] = await unbound((tx) =>
+  const [row] = await allWorkspaces((tx) =>
     tx
       .insert(deliveries)
       .values({
@@ -60,7 +61,7 @@ async function sentDelivery(to: string, providerMessageId: string) {
 }
 
 const reload = (id: string) =>
-  unbound((tx) => tx.select().from(deliveries).where(eq(deliveries.id, id)).limit(1)).then((r) => r[0]!)
+  allWorkspaces((tx) => tx.select().from(deliveries).where(eq(deliveries.id, id)).limit(1)).then((r) => r[0]!)
 
 beforeAll(async () => {
   mail = await startMail({ env: { MAIL_WEBHOOK_TOKEN: TOKEN } })
@@ -383,20 +384,32 @@ describe('an SNS notification posted as text/plain', () => {
   })
 
   /**
-   * The parser is added inside `app.register`, which encapsulates it. A parser added on the instance
-   * itself replaces the parsers for every route in the service, and the symptom is every oRPC request
-   * body arriving as `undefined` — so this asks a module procedure a question it can only refuse
-   * after reading the body.
+   * The webhook scope replaces its own content type parsers, so this checks the module's oRPC routes
+   * still read theirs.
+   *
+   * It authenticates first, on purpose. An anonymous call is refused before the body is looked at,
+   * so it answers 401 whether the body arrived or not — the version of this test that did that
+   * passed even with the parsers deliberately mounted on the root instance, and therefore guarded
+   * nothing. Asking as a service principal makes the answer depend on the body's contents.
    */
   it('leaves the module’s own routes reading their own bodies', async () => {
-    const res = await fetch(`${baseUrl}/api/mail/rpc/settings/get`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ json: { workspaceId: mail.workspaceId } }),
-    })
-    expect(res.status).toBe(401)
-    expect((await res.json()) as { json: { code: string } }).toMatchObject({
-      json: { code: 'UNAUTHORIZED' },
+    const serviceToken = await mail.kernel.auth.signService('webhook-parser-test')
+    const ask = (body: unknown) =>
+      fetch(`${baseUrl}/api/mail/rpc/settings/get`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-kern-service': serviceToken },
+        body: JSON.stringify(body),
+      })
+
+    const withId = await ask({ json: { workspaceId: mail.workspaceId } })
+    expect(withId.status).toBe(200)
+
+    // The same call minus one field the body carries: a different answer is what proves the route
+    // read the body rather than being handed nothing.
+    const withoutId = await ask({ json: {} })
+    expect(withoutId.status).toBe(400)
+    expect((await withoutId.json()) as { json: { code: string } }).toMatchObject({
+      json: { code: 'BAD_REQUEST' },
     })
   })
 
@@ -488,7 +501,7 @@ describe('normalising provider events', () => {
       Email: to,
     })
     expect((await reload(row.id)).status).toBe('failed')
-    const [suppression] = await unbound((tx) =>
+    const [suppression] = await allWorkspaces((tx) =>
       tx.select().from(suppressions).where(eq(suppressions.email, to.toLowerCase())),
     )
     expect(suppression?.reason).toBe('complaint')
