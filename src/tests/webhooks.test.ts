@@ -384,13 +384,18 @@ describe('an SNS notification posted as text/plain', () => {
   })
 
   /**
-   * The webhook scope replaces its own content type parsers, so this checks the module's oRPC routes
-   * still read theirs.
+   * The module's oRPC routes have to keep reading their own bodies, so this asks one a question only
+   * the body's *contents* can answer: 200 with a `workspaceId`, 400 without one.
    *
-   * It authenticates first, on purpose. An anonymous call is refused before the body is looked at,
-   * so it answers 401 whether the body arrived or not — the version of this test that did that
-   * passed even with the parsers deliberately mounted on the root instance, and therefore guarded
-   * nothing. Asking as a service principal makes the answer depend on the body's contents.
+   * Two things stated here when it was written are wrong, both now measured against the running
+   * service. An anonymous call is **not** refused before the body is read: the kernel hands
+   * `req.raw` to oRPC, which deserialises it before the procedure's authorisation runs, so an
+   * anonymous call with no body does not answer 401 (it answers 500 today) — the anonymous version
+   * this replaced would have failed on a lost body too. And neither version guards the choice to
+   * mount the webhook parsers on the root instance rather than inside `app.register`: mounted there
+   * the suite is 64/64 and this route answers byte for byte the same, because `createHttpServer`
+   * registers every oRPC scope — each with its own `'*'` pass-through — before `extend` runs. What
+   * this test guards is a body that never reaches the handler, whatever loses it.
    */
   it('leaves the module’s own routes reading their own bodies', async () => {
     const serviceToken = await mail.kernel.auth.signService('webhook-parser-test')
@@ -411,6 +416,25 @@ describe('an SNS notification posted as text/plain', () => {
     expect((await withoutId.json()) as { json: { code: string } }).toMatchObject({
       json: { code: 'BAD_REQUEST' },
     })
+  })
+
+  /**
+   * The ordering the comment above rests on, pinned so it is checked rather than asserted in prose.
+   * A body-less call not being refused is the load-bearing half; the status it gets instead is
+   * oRPC failing to deserialise, and is the caller's mistake reported as ours — worth improving in
+   * the kernel, so this does not pin the number.
+   */
+  it('reads the body before it refuses an anonymous caller', async () => {
+    const anon = (body?: unknown) =>
+      fetch(`${baseUrl}/api/mail/rpc/settings/get`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      })
+
+    expect((await anon({ json: { workspaceId: mail.workspaceId } })).status).toBe(401)
+    // no body, same anonymous caller: the refusal is never reached
+    expect((await anon()).status).not.toBe(401)
   })
 
   it('acknowledges an unsubscribe confirmation instead of reading it as an SES event', async () => {

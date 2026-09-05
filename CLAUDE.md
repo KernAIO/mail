@@ -138,6 +138,20 @@ platform — account email from core, digests, module notifications — is queue
   `400 workspaceId required` without one). Keep the `register` anyway — it bounds the blast radius
   to this route for anything registered later, which is the honest reason to have it. When a parser
   really is absent Fastify answers `415 FST_ERR_CTP_INVALID_MEDIA_TYPE`, loudly.
+- **An anonymous oRPC call is refused *after* the body is read, and the correction that said
+  otherwise is itself corrected here.** `createHttpServer` hands `req.raw` to oRPC, so oRPC
+  deserialises before the procedure's authorisation middleware runs: measured on the booted service,
+  `POST /api/mail/rpc/settings/get` with no credential answers **401 with a body and 500 without
+  one** — the same 500 a service principal gets — so the refusal is not reached when the body is
+  lost. On 2026-09-05 `webhooks.test.ts` asserted the reverse ("refused before the body is looked
+  at, so it answers 401 whether the body arrived or not") to justify rewriting the parser guard as a
+  service-principal call, and the rewrite's premise fell with it: mounting the webhook parsers on
+  the root instance leaves the suite **64/64 with either version**, so neither ever guarded that.
+  Keep the service-principal version — an assertion the body's *contents* decide is worth more than
+  one its mere presence decides — for that reason and not the stated one. Two things the round also
+  got wrong about its own record: `abc5194`'s commit *message* does not carry the hook-order claim
+  (the claim was in the code comment that commit added; only `576a0a1`'s message carries the parser
+  one), and a correction is a claim like any other — run it before you write it down.
 - **`JSON.parse` on a request body is a 500 waiting to happen.** `normalise('ses', …)` parsed
   `Message` unguarded, so a `Message` that is not JSON — or is `null`, a number or an array — threw a
   `SyntaxError` out of the handler and the service reported the caller's mistake as its own. It reads
@@ -168,7 +182,11 @@ platform — account email from core, digests, module notifications — is queue
   `kernel.database.db` select still returned the row. The policies are real and production is
   subject to them, because it connects as `kern_app`; the *check* is what was wrong. Never read
   isolation off a query on a dev or CI database — ask the catalogue whether the policy exists, which
-  is what `module-mail`'s `migrations.test.ts` does and the reason it is written that way.
+  is what `module-mail`'s `migrations.test.ts` does and the reason it is written that way. There
+  *is* a way to see the policy work here, and it takes four statements: `create role … login`, grant
+  it `usage` and `select`, then in one transaction `set local role`, select, and select again after
+  `set_config('app.workspace_id','*',true)`. Measured on this machine — 0 rows unbound, 1 row bound
+  — which is the production shape (`kern_app`) rather than the superuser's.
 - Mailpit (http://localhost:8025) receives everything in development; its API is how tests assert.
 - `providerFor()` and `instanceName()` read `SMTP_URL` / `MAIL_FROM` / `KERN_INSTANCE_NAME` from
   `process.env`, not from the validated `MailEnv`. dotenv puts them there in a deployment; anything that
