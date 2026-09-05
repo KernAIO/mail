@@ -6,21 +6,21 @@ settings:
 
 overrides:
   '@kernhq/kernel': ^0.10.0
-  '@kernhq/contracts': ^0.7.0
+  '@kernhq/contracts': ^0.8.0
 
 importers:
 
   .:
     dependencies:
       '@kernhq/contracts':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       '@kernhq/kernel':
         specifier: ^0.10.0
         version: 0.10.0
       '@kernhq/module-mail':
         specifier: ^0.6.1
-        version: 0.6.1(@kernhq/contracts@0.7.0)(@kernhq/kernel@0.10.0)(fastify@5.12.1)(pg@8.23.0)(svgo@4.1.0)
+        version: 0.6.1(@kernhq/contracts@0.8.0)(@kernhq/kernel@0.10.0)(fastify@5.12.1)(pg@8.23.0)(svgo@4.1.0)
       dotenv:
         specifier: ^17.4.0
         version: 17.4.2
@@ -428,8 +428,8 @@ packages:
   '@js-sdsl/ordered-map@4.4.2':
     resolution: {integrity: sha512-iUKgm52T8HOE/makSxjqoWhe95ZJA1/G1sYsGev2JDKUSS14KAgg1LHb+Ba+IPow0xflbnSkOsZcO08C7w1gYw==}
 
-  '@kernhq/contracts@0.7.0':
-    resolution: {integrity: sha512-cp+dM+ScKi7hZ7hwsg+t9VpLoX8+oRnSfCydWJa6iQAtvjt+RBmgZNv67X9Du4b0I+AA24FpI6hyb2NTaMcLUw==}
+  '@kernhq/contracts@0.8.0':
+    resolution: {integrity: sha512-UcQE9tYnlrwahW7v3ilUvgJSaiLdrA6CaOfONGhUBqh2s7LStPUa9skeyfbGU6TWJPFhhlOi2nKp30HVpxnATg==}
 
   '@kernhq/kernel@0.10.0':
     resolution: {integrity: sha512-XjJU4JsYq54ASWd0KVdv3nOtM0Skf0iNENWpAFMgyYoVsA8CNqvT2Wr7Y4kl/j6HnZiw59ycjUdHSY+waSIs3w==}
@@ -438,7 +438,7 @@ packages:
     resolution: {integrity: sha512-7Pi0aJ7g6PfjgUvB6kJ3c+iXBo5vTDhuPGK7W4u/vFs/hPSAcFh3E8z8IsijFkdLH3uHETnyWo+ZzQ73pT8YTA==}
     engines: {node: '>=24'}
     peerDependencies:
-      '@kernhq/contracts': ^0.7.0
+      '@kernhq/contracts': ^0.8.0
       '@kernhq/kernel': ^0.10.0
       '@kernhq/ui': ^0.14.0
       '@tanstack/svelte-query': ^6.1.0
@@ -3048,7 +3048,7 @@ snapshots:
 
   '@js-sdsl/ordered-map@4.4.2': {}
 
-  '@kernhq/contracts@0.7.0':
+  '@kernhq/contracts@0.8.0':
     dependencies:
       '@orpc/contract': 1.15.0
       zod: 4.5.4
@@ -3062,7 +3062,7 @@ snapshots:
       '@fastify/cors': 11.3.0
       '@fastify/helmet': 13.1.1
       '@fastify/rate-limit': 10.3.0
-      '@kernhq/contracts': 0.7.0
+      '@kernhq/contracts': 0.8.0
       '@orpc/contract': 1.15.0
       '@orpc/openapi': 1.15.0(fastify@5.12.1)
       '@orpc/server': 1.15.0(fastify@5.12.1)
@@ -3112,10 +3112,10 @@ snapshots:
       - supports-color
       - ws
 
-  '@kernhq/module-mail@0.6.1(@kernhq/contracts@0.7.0)(@kernhq/kernel@0.10.0)(fastify@5.12.1)(pg@8.23.0)(svgo@4.1.0)':
+  '@kernhq/module-mail@0.6.1(@kernhq/contracts@0.8.0)(@kernhq/kernel@0.10.0)(fastify@5.12.1)(pg@8.23.0)(svgo@4.1.0)':
     dependencies:
       '@aws-sdk/client-sesv2': 3.1124.0
-      '@kernhq/contracts': 0.7.0
+      '@kernhq/contracts': 0.8.0
       '@kernhq/kernel': 0.10.0
       '@kernhq/sdk': 0.1.9
       '@orpc/contract': 1.15.0
@@ -3169,7 +3169,7 @@ snapshots:
 
   '@kernhq/sdk@0.1.9':
     dependencies:
-      '@kernhq/contracts': 0.7.0
+      '@kernhq/contracts': 0.8.0
       '@orpc/client': 1.15.0
       '@orpc/contract': 1.15.0
       zod: 4.5.4
