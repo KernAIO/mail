@@ -281,9 +281,14 @@ export async function mountWebhooks(app: FastifyInstance, kernel: Kernel, env: M
    * answered `200 {"ok":true,"ignored":true}` while nothing was recorded. Signature verification sat
    * behind the same `body.Type` and had never once executed.
    *
-   * `app.register` is what keeps this to this route: content type parsers are encapsulated, so
-   * replacing them here changes nothing for the oRPC routes beside it — a parser added on `app`
-   * itself would replace theirs and every request body in the service would arrive as `undefined`.
+   * `app.register` is what keeps this to this route. It is hygiene rather than a rescue, and the
+   * difference is worth stating because the comment here used to overclaim: a scope's parser set is
+   * fixed when the scope is registered, and `createHttpServer` registers every oRPC scope — each
+   * with its own `'*'` pass-through — before it calls `extend`. So mounting these on `app` instead
+   * breaks nothing today; it was tried, and the suite and `/api/mail/rpc/*` were unchanged. What the
+   * scope buys is that a route added to this service later cannot inherit a `text/plain` parser that
+   * silently JSON-decodes its body. A parser that is genuinely missing is a loud
+   * `415 FST_ERR_CTP_INVALID_MEDIA_TYPE`, not a body arriving as `undefined`.
    */
   await app.register(async (scope) => {
     scope.removeAllContentTypeParsers()

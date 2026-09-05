@@ -50,8 +50,9 @@ export async function createMailService(opts: MailServiceOptions = {}): Promise<
       resolvePrincipal: (req) => principals.fromRequest(req),
       corsOrigins,
       openapi: { title: 'Kern', version: kernel.version },
-      // The hook goes on before the webhook scope is registered: awaiting a `register` flushes
-      // Fastify's pending plugins, and a route's hooks are fixed at that point.
+      // Either order works: a hook added on the root instance runs for every route whenever it is
+      // added, up to `ready()`. (An earlier comment here claimed awaiting a `register` fixed a
+      // route's hooks. It does flush the pending plugin, but hooks are unaffected — measured.)
       extend: async (fastify) => {
         mountHealthWarnings(fastify, env)
         await mountWebhooks(fastify, kernel, env)

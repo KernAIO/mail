@@ -122,12 +122,22 @@ platform — account email from core, digests, module notifications — is queue
   *string* — so `body.Type` was undefined, every branch missed, and each SES bounce was answered
   `200 {"ok":true,"ignored":true}` with nothing written. The whole SES path was dead, signature
   verification included: it had never once executed, because it sits behind the same `body.Type`.
-  Nothing noticed for as long as it existed, because every test posted `application/json`. The
-  parser is scoped with `app.register` — a parser added on the instance itself replaces the parsers
-  for **every** route in the service, and the symptom is every oRPC body arriving as `undefined` —
-  and `webhooks.test.ts` posts the way SNS does, with a generated signing certificate served to the
+  Nothing noticed for as long as it existed, because every test posted `application/json`.
+  `webhooks.test.ts` posts the way SNS does now, with a generated signing certificate served to the
   one fetch the route makes. When a provider's shape is only ever exercised by a fixture we wrote,
   send the request the provider sends, headers included.
+- **A content type parser on the root instance does not reach the oRPC routes, and a missing parser
+  is a 415 — never a body arriving as `undefined`.** This file, `webhooks.ts` and the commit that
+  added them all claimed the opposite until 2026-09-05, and it was never true. Measured on Fastify
+  5.12.1: a scope's parser set is fixed when the scope is *registered*, so a
+  `removeAllContentTypeParsers()` on the root reaches only the root's own routes and scopes
+  registered after it. Every oRPC scope is immune twice over — `createHttpServer` gives each one its
+  own `'*'` pass-through, and registers it before `extend` runs. Mounting the webhook parsers on
+  `app` instead of inside `app.register` was tried: the whole suite stayed green and
+  `/api/mail/rpc/settings/get` answered byte for byte the same (`200` for a valid `workspaceId`,
+  `400 workspaceId required` without one). Keep the `register` anyway — it bounds the blast radius
+  to this route for anything registered later, which is the honest reason to have it. When a parser
+  really is absent Fastify answers `415 FST_ERR_CTP_INVALID_MEDIA_TYPE`, loudly.
 - **`JSON.parse` on a request body is a 500 waiting to happen.** `normalise('ses', …)` parsed
   `Message` unguarded, so a `Message` that is not JSON — or is `null`, a number or an array — threw a
   `SyntaxError` out of the handler and the service reported the caller's mistake as its own. It reads
@@ -138,15 +148,27 @@ platform — account email from core, digests, module notifications — is queue
   refusing every webhook is a *healthy* service — the provider's dashboard shows the failing endpoint
   and Kern shows nothing — and nobody reads a container log from three weeks ago. The kernel owns
   `/api/health` and answers it with an object, so `src/health.ts` adds `warnings` to that object in a
-  `preSerialization` hook rather than standing up a second endpoint. Mount the hook **before**
-  awaiting the webhook `register`: awaiting a register flushes Fastify's pending plugins and a
-  route's hooks are fixed at that point.
+  `preSerialization` hook rather than standing up a second endpoint. **The order inside `extend` does
+  not matter**, though this file said it did until 2026-09-05: measured on Fastify 5.12.1, a hook
+  added on the root instance runs for every route whenever it is added — routes registered before it,
+  scopes registered before it, and scopes registered after. Awaiting a `register` does flush
+  Fastify's pending plugins, but that settles the plugin's own body, not the instance's hooks. The
+  one real deadline is `ready()`: `addHook` after it throws `AVV_ERR_ROOT_PLG_BOOTED`, and `extend`
+  runs well before that.
 - `deliveries`, `suppressions` and `inbound_routes` carry a **forced row-level policy** since
   `@kernhq/module-mail` 0.5.0 (they carried none before, and this note argued for it). The policy
   admits a row for its own workspace or for the `'*'` binding; this service's webhook handler and
   its tests bind `'*'` (written locally as `ALL_WORKSPACES`) because a provider reports on every
-  workspace's mail at once. A transaction that binds nothing sees nothing — a raw
-  `kernel.database.db` query against these tables returns no rows, which is the point.
+  workspace's mail at once. Bind before you read.
+- **"A transaction that binds nothing sees nothing" is not something you can check here, and this
+  file asserted it until 2026-09-05.** A superuser bypasses row-level security outright — forced or
+  not — and both this machine and CI connect as `kern`, which is one (`usesuper` is true; CI's
+  `pgvector/pgvector:pg18` makes `POSTGRES_USER` the superuser). Measured: with `relrowsecurity` and
+  `relforcerowsecurity` both true on `deliveries`, `suppressions` and `inbound_routes`, an unbound
+  `kernel.database.db` select still returned the row. The policies are real and production is
+  subject to them, because it connects as `kern_app`; the *check* is what was wrong. Never read
+  isolation off a query on a dev or CI database — ask the catalogue whether the policy exists, which
+  is what `module-mail`'s `migrations.test.ts` does and the reason it is written that way.
 - Mailpit (http://localhost:8025) receives everything in development; its API is how tests assert.
 - `providerFor()` and `instanceName()` read `SMTP_URL` / `MAIL_FROM` / `KERN_INSTANCE_NAME` from
   `process.env`, not from the validated `MailEnv`. dotenv puts them there in a deployment; anything that
