@@ -20,8 +20,8 @@
   },
   "dependencies": {
     "@kernhq/contracts": "^0.8.0",
-    "@kernhq/kernel": "^0.10.0",
-    "@kernhq/module-mail": "^0.6.1",
+    "@kernhq/kernel": "^0.10.2",
+    "@kernhq/module-mail": "^0.6.3",
     "dotenv": "^17.4.0",
     "fastify": "^5.6.0",
     "imapflow": "^1.7.0",
@@ -30,7 +30,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.0",
-    "@kernhq/testing": "^0.1.12",
+    "@kernhq/testing": "^0.1.14",
     "@kernhq/tsconfig": "^0.1.1",
     "@orpc/contract": "^1.15.0",
     "@orpc/server": "^1.15.0",
