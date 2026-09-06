@@ -19,9 +19,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@kernhq/contracts": "^0.8.0",
-    "@kernhq/kernel": "^0.10.2",
-    "@kernhq/module-mail": "^0.6.3",
+    "@kernhq/contracts": "^0.8.1",
+    "@kernhq/kernel": "^0.10.5",
+    "@kernhq/module-mail": "^0.6.5",
     "dotenv": "^17.4.0",
     "fastify": "^5.6.0",
     "imapflow": "^1.7.0",
